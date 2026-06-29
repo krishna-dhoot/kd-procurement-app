@@ -3229,7 +3229,15 @@ async function shareDocument(docTitle, content) {
       const pxToMM = 25.4 / 96 / scale;
       const widthMM = canvas.width * pxToMM;
       const heightMM = canvas.height * pxToMM;
-      const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: [widthMM, heightMM] });
+      // jsPDF defaults to portrait orientation, and when given a custom
+      // format array that describes a landscape shape (width > height)
+      // without being told otherwise, it silently swaps width/height to
+      // force portrait — addImage() then draws using our original,
+      // unswapped width onto a page that's actually narrower, clipping
+      // whatever doesn't fit. Telling it the orientation up front stops it
+      // from swapping anything.
+      const orientation = widthMM >= heightMM ? 'l' : 'p';
+      const pdf = new window.jspdf.jsPDF({ orientation, unit: 'mm', format: [widthMM, heightMM] });
       pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthMM, heightMM);
 
       const filename = safeTitle + '.pdf';
