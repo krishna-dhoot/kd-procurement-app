@@ -594,6 +594,7 @@ if ('serviceWorker' in navigator) {
     Get notified instantly for new requisitions, orders and deliveries — even when the app is closed.
     <button class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px;" onclick="enablePushNotifications()">🔔 Enable Push Notifications</button>
   </div>
+  <button class="notif-mark-all-btn" onclick="debugPushState()" style="border-top:none;">🔍 Debug push subscription</button>
   <button class="notif-mark-all-btn" onclick="markAllNotifsRead()">Mark all as read</button>
   <div class="notif-list" id="notif-list">
     <div class="notif-empty">🔔<br>No notifications yet</div>
@@ -4298,6 +4299,27 @@ function enablePushNotifications() {
     }
   });
 }
+
+// Temporary diagnostic — shows the actual OneSignal subscription state
+// on-screen (no devtools needed) to find out whether a real subscription
+// (with an id/token) was created, vs. the local "optedIn" flag being true
+// without one actually existing server-side.
+function debugPushState() {
+  if (!window.OneSignalDeferred) { alert('OneSignal not loaded'); return; }
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    const sub = OneSignal.User.PushSubscription;
+    const info = {
+      browserPermission: Notification.permission,
+      optedIn: sub.optedIn,
+      subscriptionId: sub.id || '(none)',
+      subscriptionToken: sub.token ? sub.token.slice(0, 24) + '…' : '(none)',
+      onesignalId: OneSignal.User.onesignalId || '(none)',
+      swRegistered: !!(await navigator.serviceWorker.getRegistration()),
+    };
+    alert(JSON.stringify(info, null, 2));
+  });
+}
+
 function closeNotifPanel() {
   document.getElementById('notif-overlay').classList.remove('open');
   document.getElementById('notif-panel').classList.remove('open');
