@@ -103,6 +103,20 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0F6E56">
 <title>Site Procurement Manager</title>
+<!-- OneSignal Web Push — shares our own sw.js (see serviceWorkerPath below)
+     instead of registering a separate OneSignalSDKWorker.js, so push and
+     offline-caching live in one service worker. -->
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "db6beb30-8bc6-44fc-8dee-833e0ace7746",
+      serviceWorkerPath: "sw.js",
+      serviceWorkerParam: { scope: "/" }
+    });
+  });
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -575,6 +589,10 @@ if ('serviceWorker' in navigator) {
     <span style="font-size:18px;">🔔</span>
     <span class="notif-panel-title">Notifications</span>
     <button class="notif-panel-close" onclick="closeNotifPanel()">✕</button>
+  </div>
+  <div id="push-optin-banner" style="display:none;margin:10px 14px 0;padding:10px 12px;background:var(--gray-light);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;color:var(--text-2);">
+    Get notified instantly for new requisitions, orders and deliveries — even when the app is closed.
+    <button class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px;" onclick="enablePushNotifications()">🔔 Enable Push Notifications</button>
   </div>
   <button class="notif-mark-all-btn" onclick="markAllNotifsRead()">Mark all as read</button>
   <div class="notif-list" id="notif-list">
@@ -1775,26 +1793,33 @@ function renderGsSetup() {
             <div>3. Click <strong>Deploy → New deployment → Web app</strong></div>
             <div>4. Set <em>Execute as</em>: <strong>Me</strong> &nbsp;|&nbsp; <em>Who has access</em>: <strong>Anyone</strong></div>
             <div>5. Copy the <strong>Web App URL</strong> and paste it here</div>
+            <div>6. In the script, paste your OneSignal <strong>REST API Key</strong> (OneSignal dashboard → Settings → Keys &amp; IDs) into <code style="background:rgba(0,0,0,0.06);padding:1px 5px;border-radius:3px;">ONESIGNAL_REST_API_KEY</code></div>
           </div>
         </div>
 
         <details style="margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;">
           <summary style="padding:10px 14px;font-size:12px;font-weight:600;cursor:pointer;background:var(--gray-light);color:var(--text-2);list-style:none;">▶ Show Apps Script code to copy</summary>
-          <pre style="margin:0;padding:14px;font-size:11px;font-family:'DM Mono',monospace;background:var(--surface);overflow-x:auto;color:var(--text);line-height:1.6;">// ── Telegram config (fill these in) ──────────────────────────
-var TELEGRAM_BOT_TOKEN = 'YOUR_BOT_TOKEN_HERE';
-var TELEGRAM_CHAT_ID   = 'YOUR_GROUP_CHAT_ID_HERE'; // negative number for groups
+          <pre style="margin:0;padding:14px;font-size:11px;font-family:'DM Mono',monospace;background:var(--surface);overflow-x:auto;color:var(--text);line-height:1.6;">// ── OneSignal config (fill this in) ───────────────────────────
+var ONESIGNAL_APP_ID       = 'db6beb30-8bc6-44fc-8dee-833e0ace7746';
+var ONESIGNAL_REST_API_KEY = 'YOUR_ONESIGNAL_REST_API_KEY_HERE'; // OneSignal dashboard → Settings → Keys &amp; IDs
 
 // ── Notification helpers ──────────────────────────────────────
-function sendTelegram_(msg) {
-  if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'YOUR_BOT_TOKEN_HERE') return;
+function sendOneSignal_(title, msg) {
+  if (!ONESIGNAL_REST_API_KEY || ONESIGNAL_REST_API_KEY === 'YOUR_ONESIGNAL_REST_API_KEY_HERE') return;
   try {
     UrlFetchApp.fetch(
-      'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendMessage',
+      'https://onesignal.com/api/v1/notifications',
       { method: 'post', contentType: 'application/json',
-        payload: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: msg, parse_mode: 'HTML' }),
+        headers: { Authorization: 'Basic ' + ONESIGNAL_REST_API_KEY },
+        payload: JSON.stringify({
+          app_id: ONESIGNAL_APP_ID,
+          included_segments: ['Subscribed Users'],
+          headings: { en: title },
+          contents: { en: msg }
+        }),
         muteHttpExceptions: true }
     );
-  } catch(e) { Logger.log('Telegram error: ' + e); }
+  } catch(e) { Logger.log('OneSignal error: ' + e); }
 }
 
 function pushNotification_(type, msg, details) {
@@ -1807,7 +1832,7 @@ function pushNotification_(type, msg, details) {
   var n = Math.max(sh.getLastRow(), 1);
   var id = 'NOTIF-' + ('000' + n).slice(-4);
   sh.appendRow([id, type, msg, JSON.stringify(details || {}), new Date().toISOString()]);
-  sendTelegram_(msg);
+  sendOneSignal_('Site Procurement', msg);
 }
 
 function handleNotify_(type, d) {
@@ -1824,7 +1849,7 @@ function doPost(e) {
   var data = JSON.parse(e.postData.contents);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // NOTIFY action — write to Notifications sheet + send Telegram
+  // NOTIFY action — write to Notifications sheet + send OneSignal push
   if (data.action === 'notify') {
     handleNotify_(data.type, data.data || {});
     return ContentService
@@ -4112,11 +4137,31 @@ function openNotifPanel() {
   document.getElementById('notif-overlay').classList.add('open');
   document.getElementById('notif-panel').classList.add('open');
   renderNotifList();
+  refreshPushOptInBanner();
   // Mark as read after 800ms so badge briefly shows before clearing
   setTimeout(() => {
     localStorage.setItem('notifSeenAt', new Date().toISOString());
     updateNotifBadge();
   }, 800);
+}
+
+// --- Push opt-in (OneSignal) ---
+function refreshPushOptInBanner() {
+  const banner = document.getElementById('push-optin-banner');
+  if (!banner || !window.OneSignalDeferred) return;
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    const optedIn = OneSignal.User.PushSubscription.optedIn;
+    banner.style.display = optedIn ? 'none' : 'block';
+  });
+}
+
+function enablePushNotifications() {
+  if (!window.OneSignalDeferred) return;
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    await OneSignal.Notifications.requestPermission();
+    refreshPushOptInBanner();
+    if (OneSignal.User.PushSubscription.optedIn) notify('Push notifications enabled');
+  });
 }
 function closeNotifPanel() {
   document.getElementById('notif-overlay').classList.remove('open');
