@@ -1,0 +1,1887 @@
+<!DOCTYPE html>
+<!--
+════════════════════════════════════════════════════════════════════════════════
+  PAYMENTS / ACCOUNTS PAYABLE — Architecture Summary
+════════════════════════════════════════════════════════════════════════════════
+
+OVERVIEW
+  Single-file web app (HTML + CSS + JS) for office-side AP management.
+  Shares the same Google Apps Script Web App URL and Google Sheet as the
+  procurement app. Reads PurchaseOrders, SiteReceipts, MasterData (read-only);
+  writes to VendorBills and Payments tabs.
+
+PAYMENT FLOW
+  1. Vendor Bill   (VB-001…)  — office receives/creates bill against a vendor
+  2. Approver reviews and approves the bill
+  3. Payment       (PMT-001…) — office records payment; one of three types:
+       advance          — paid before bill or receipt exists
+       against-bill     — paid against one or more approved bills
+       against-receipt  — paid against MRE(s) when bill is still pending
+
+  Bill statuses: received → approved → partial → paid | disputed
+  Paid amount / balance computed at runtime from payment allocations.
+
+ENTITIES
+  VendorBill { id, vendor, billNumber, billDate, dueDate, amount,
+               linkedPOs[], linkedMREs[], status, submittedBy,
+               approvedBy, approvedAt, site, remarks, createdAt }
+
+  Payment    { id, vendor, paymentDate, paymentType, amount, mode,
+               reference, allocations[{billId,amount}], linkedMREs[],
+               site, remarks, createdBy, createdAt }
+
+PAGES
+  Dashboard  — 4 metric cards: Overdue, Awaiting Approval,
+               Advances to Reconcile, MREs Without Bills
+  Bills      — list + create/edit + approve/dispute + detail view
+  Payments   — list + create/edit + detail view
+  Vendor Ledger — per-vendor: ordered, billed, paid, balance
+
+GOOGLE SHEETS (same GAS URL as procurement app)
+  Reads:  PurchaseOrders, SiteReceipts, MasterData
+  Writes: VendorBills, Payments
+  Same no-cors POST upsert + GET readAll pattern.
+
+════════════════════════════════════════════════════════════════════════════════
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- PWA / Home Screen -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Payments">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0D4A7A">
+<title>Payments Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  :root {
+    --green: #1D9E75; --green-dark: #0F6E56; --green-light: #E1F5EE; --green-mid: #9FE1CB;
+    --amber: #BA7517; --amber-light: #FAEEDA;
+    --red: #A32D2D; --red-light: #FCEBEB;
+    --blue: #185FA5; --blue-light: #E6F1FB;
+    --purple: #6B3FA0; --purple-light: #F0EAFA;
+    --gray: #5F5E5A; --gray-light: #F1EFE8; --gray-mid: #D3D1C7;
+    --bg: #F4F4F0; --surface: #fff; --border: #E2E0D8;
+    --text: #1a1a18; --text-2: #5F5E5A; --text-3: #888780;
+    --radius: 12px; --radius-sm: 8px;
+    --shadow: 0 1px 4px rgba(0,0,0,0.07);
+    --tab-h: 64px; --top-h: 54px;
+  }
+
+  html, body { height: 100%; overflow: hidden; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }
+
+  /* ══ TOPBAR ══ */
+  .topbar { position: fixed; top: 0; left: 0; right: 0; height: var(--top-h); z-index: 90; background: #185FA5; color: #fff; display: flex; align-items: center; padding: 0 12px; gap: 8px; }
+  .topbar-menu-btn { width: 40px; height: 40px; border: none; background: none; color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; border-radius: 8px; flex-shrink: 0; }
+  .topbar-menu-btn:active { background: rgba(255,255,255,0.15); }
+  .topbar-title { font-size: 16px; font-weight: 600; flex: 1; letter-spacing: -0.01em; }
+  .topbar-actions { display: flex; align-items: center; gap: 4px; }
+  .topbar-icon-btn { width: 40px; height: 40px; border: none; background: none; color: rgba(255,255,255,0.85); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+  .topbar-icon-btn:active { background: rgba(255,255,255,0.15); }
+  .gs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-mid); display: inline-block; }
+  .gs-dot.disconnected { background: #FAC775; }
+
+  /* ══ DRAWER ══ */
+  .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 150; opacity: 0; pointer-events: none; transition: opacity 0.22s; }
+  .drawer-overlay.open { opacity: 1; pointer-events: all; }
+  .drawer { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: #0D4A7A; z-index: 160; transition: left 0.24s cubic-bezier(.4,0,.2,1); overflow-y: auto; display: flex; flex-direction: column; }
+  .drawer.open { left: 0; }
+  .drawer-header { padding: 52px 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.12); }
+  .drawer-logo { display: flex; align-items: center; gap: 10px; }
+  .drawer-logo-icon { width: 36px; height: 36px; background: rgba(255,255,255,0.18); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .drawer-logo-text { font-size: 14px; font-weight: 600; color: #fff; line-height: 1.2; }
+  .drawer-logo-sub { font-size: 11px; color: rgba(255,255,255,0.6); }
+  .drawer-section { padding: 10px 10px 4px; }
+  .drawer-label { font-size: 10px; letter-spacing: 0.08em; opacity: 0.5; padding: 0 10px; margin-bottom: 4px; text-transform: uppercase; color: #fff; }
+  .drawer-item { display: flex; align-items: center; gap: 12px; padding: 12px 12px; border-radius: 9px; cursor: pointer; font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.82); transition: background 0.12s; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; min-height: 48px; }
+  .drawer-item:active { background: rgba(255,255,255,0.12); }
+  .drawer-item.active { background: rgba(255,255,255,0.18); color: #fff; }
+  .drawer-item-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+
+  /* ══ BOTTOM TAB BAR ══ */
+  .tab-bar { position: fixed; bottom: 0; left: 0; right: 0; height: var(--tab-h); background: var(--surface); border-top: 1px solid var(--border); display: flex; z-index: 90; padding-bottom: env(safe-area-inset-bottom); }
+  .tab-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; border: none; background: none; color: var(--text-3); font-size: 10px; font-weight: 500; font-family: 'DM Sans', sans-serif; padding: 6px 2px; position: relative; min-height: 44px; }
+  .tab-item.active { color: var(--blue); }
+  .tab-item-icon { font-size: 20px; line-height: 1; }
+  .tab-badge { position: absolute; top: 6px; right: calc(50% - 18px); background: var(--red); color: #fff; font-size: 9px; font-weight: 700; min-width: 16px; height: 16px; border-radius: 8px; display: flex; align-items: center; justify-content: center; padding: 0 3px; }
+
+  /* ══ MAIN CONTENT ══ */
+  .main { position: fixed; top: var(--top-h); left: 0; right: 0; bottom: var(--tab-h); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .content { padding: 14px 14px 8px; }
+
+  /* ══ LOGIN SCREEN ══ */
+  .login-screen { position: fixed; inset: 0; background: #0D4A7A; z-index: 500; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .login-card { background: var(--surface); border-radius: 20px; width: 100%; max-width: 360px; padding: 32px 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+  .login-logo { width: 52px; height: 52px; background: var(--blue); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 26px; margin: 0 auto 14px; }
+  .login-title { font-size: 22px; font-weight: 600; text-align: center; margin-bottom: 4px; }
+  .login-sub { font-size: 13px; color: var(--text-2); text-align: center; margin-bottom: 24px; }
+  .login-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .login-field label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+  .login-field select, .login-field input { padding: 13px 14px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 16px; font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--text); outline: none; -webkit-appearance: none; appearance: none; }
+  .login-field select:focus, .login-field input:focus { border-color: var(--blue); }
+  .login-btn { width: 100%; padding: 14px; background: var(--blue); color: #fff; border: none; border-radius: var(--radius-sm); font-size: 16px; font-weight: 600; cursor: pointer; font-family: 'DM Sans', sans-serif; margin-top: 4px; }
+  .login-btn:active { background: #0D4A7A; }
+  .login-error { color: var(--red); font-size: 13px; text-align: center; min-height: 20px; margin-top: 8px; }
+
+  /* ══ PAGE HEADER ══ */
+  .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 10px; }
+  .page-header h2 { font-size: 18px; font-weight: 600; }
+  .page-header p { font-size: 12px; color: var(--text-2); margin-top: 1px; }
+
+  /* ══ BUTTONS ══ */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; cursor: pointer; border: none; font-family: 'DM Sans', sans-serif; transition: opacity 0.1s; min-height: 44px; }
+  .btn:active { opacity: 0.8; transform: scale(0.98); }
+  .btn-primary { background: var(--blue); color: #fff; }
+  .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-success { background: var(--green); color: #fff; }
+  .btn-danger { background: var(--red-light); color: var(--red); border: 1px solid #F7C1C1; }
+  .btn-warning { background: var(--amber-light); color: var(--amber); border: 1px solid #F0C040; }
+  .btn-sm { padding: 7px 12px; font-size: 13px; min-height: 36px; }
+  .btn-icon { padding: 8px; min-width: 40px; justify-content: center; min-height: 40px; }
+  .fab { position: fixed; bottom: calc(var(--tab-h) + 16px); right: 16px; width: 56px; height: 56px; border-radius: 50%; background: var(--blue); color: #fff; border: none; font-size: 28px; cursor: pointer; box-shadow: 0 4px 16px rgba(24,95,165,0.4); display: flex; align-items: center; justify-content: center; z-index: 80; }
+  .fab:active { background: #0D4A7A; transform: scale(0.95); }
+
+  /* ══ STAT CARDS ══ */
+  .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .stat-card { background: var(--surface); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); cursor: pointer; }
+  .stat-card:active { opacity: 0.85; }
+  .stat-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .stat-value { font-size: 24px; font-weight: 600; color: var(--text); font-family: 'DM Mono', monospace; }
+  .stat-value.green { color: var(--green-dark); }
+  .stat-value.amber { color: var(--amber); }
+  .stat-value.red { color: var(--red); }
+  .stat-value.blue { color: var(--blue); }
+  .stat-sub { font-size: 11px; color: var(--text-3); margin-top: 3px; }
+
+  /* ══ RECORD CARDS ══ */
+  .record-list { display: flex; flex-direction: column; gap: 10px; }
+  .record-card { background: var(--surface); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); cursor: pointer; }
+  .record-card:active { opacity: 0.85; }
+  .record-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .record-card-id { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--text-3); font-weight: 500; }
+  .record-card-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  .record-card-sub { font-size: 13px; color: var(--text-2); }
+  .record-card-bottom { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .record-card-amount { font-size: 16px; font-weight: 600; color: var(--blue); margin-left: auto; }
+  .record-card-amount.paid { color: var(--green-dark); }
+
+  /* ══ BADGES ══ */
+  .badge { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+  .badge-received { background: var(--gray-light); color: var(--gray); }
+  .badge-approved { background: var(--blue-light); color: var(--blue); }
+  .badge-partial { background: var(--amber-light); color: var(--amber); }
+  .badge-paid { background: var(--green-light); color: var(--green-dark); }
+  .badge-disputed { background: var(--red-light); color: var(--red); }
+  .badge-advance { background: var(--purple-light); color: var(--purple); }
+  .badge-against-bill { background: var(--blue-light); color: var(--blue); }
+  .badge-against-receipt { background: var(--green-light); color: var(--green-dark); }
+  .badge-overdue { background: var(--red-light); color: var(--red); }
+
+  /* ══ ACTION OVERLAY ══ */
+  #action-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999; display:none; align-items:center; justify-content:center; flex-direction:column; gap:14px; }
+  #action-overlay.active { display:flex; }
+  .spinner { width:40px; height:40px; border:4px solid rgba(255,255,255,0.25); border-top-color:#fff; border-radius:50%; animation:spin 0.75s linear infinite; }
+  #action-overlay-label { color:#fff; font-size:14px; font-weight:600; letter-spacing:0.02em; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ══ MODAL ══ */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; display: flex; align-items: flex-end; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal { background: var(--surface); border-radius: 20px 20px 0 0; width: 100%; max-height: 92vh; overflow-y: auto; transform: translateY(100%); transition: transform 0.24s cubic-bezier(.4,0,.2,1); padding-bottom: env(safe-area-inset-bottom); }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal-handle { width: 36px; height: 4px; background: var(--gray-mid); border-radius: 2px; margin: 10px auto 0; }
+  .modal-header { padding: 14px 20px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 16px; font-weight: 600; }
+  .modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-footer { padding: 12px 20px 16px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+  .modal-footer .btn { flex: 1; justify-content: center; }
+
+  /* ══ FORMS ══ */
+  .field-group { display: flex; flex-direction: column; gap: 6px; }
+  .field-group label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+  .field-group input, .field-group select, .field-group textarea {
+    padding: 12px 14px; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 16px; font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--text);
+    outline: none; -webkit-appearance: none; appearance: none; width: 100%;
+  }
+  .field-group input:focus, .field-group select:focus, .field-group textarea:focus { border-color: var(--blue); }
+  .field-group textarea { resize: vertical; min-height: 70px; font-size: 15px; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .section-divider { font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.07em; padding: 4px 0; border-bottom: 1px solid var(--border); }
+
+  /* Checklist for linking POs/MREs */
+  .link-list { border: 1.5px solid var(--border); border-radius: var(--radius-sm); max-height: 180px; overflow-y: auto; }
+  .link-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .link-item:last-child { border-bottom: none; }
+  .link-item input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--blue); flex-shrink: 0; }
+  .link-item-label { flex: 1; }
+  .link-item-sub { font-size: 11px; color: var(--text-3); }
+  .link-empty { padding: 14px; font-size: 13px; color: var(--text-3); text-align: center; }
+
+  /* Allocation table */
+  .alloc-table { width: 100%; border-collapse: collapse; }
+  .alloc-table th { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; padding: 6px 8px; text-align: left; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .alloc-table td { padding: 8px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .alloc-table tr:last-child td { border-bottom: none; }
+  .alloc-table input[type=number] { padding: 6px 8px; border: 1.5px solid var(--border); border-radius: 6px; font-size: 14px; font-family: 'DM Mono', monospace; width: 100%; min-height: 36px; outline: none; }
+  .alloc-table input[type=number]:focus { border-color: var(--blue); }
+  .alloc-table input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--blue); }
+
+  /* ══ DETAIL VIEW ══ */
+  .detail-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .detail-id-badge { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; background: var(--gray-light); border-radius: var(--radius-sm); padding: 5px 10px; color: var(--text-2); }
+  .detail-fields { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 14px; }
+  .detail-field { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .detail-field:last-child { border-bottom: none; }
+  .detail-field-label { font-size: 12px; color: var(--text-3); font-weight: 500; flex-shrink: 0; min-width: 110px; }
+  .detail-field-value { font-size: 14px; color: var(--text); font-weight: 500; text-align: right; }
+  .detail-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); margin: 14px 0 8px; }
+  .detail-linked { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .detail-linked-chip { display: inline-flex; align-items: center; background: var(--blue-light); color: var(--blue); font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 20px; cursor: pointer; border: none; font-family: 'DM Mono', monospace; min-height: 36px; }
+
+  /* ══ FILTER BAR ══ */
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filter-select { font-size: 12px; padding: 6px 10px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-family: 'DM Sans', sans-serif; flex: 1; min-width: 100px; }
+  .filter-select.active { border-color: var(--blue); color: var(--blue); background: var(--blue-light); }
+
+  /* ══ VENDOR LEDGER ══ */
+  .ledger-table-wrap { overflow-x: auto; border-radius: var(--radius); box-shadow: var(--shadow); }
+  .ledger-table { width: 100%; border-collapse: collapse; background: var(--surface); min-width: 480px; }
+  .ledger-table th { background: var(--bg); font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-2); padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  .ledger-table td { padding: 11px 14px; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .ledger-table tr:last-child td { border-bottom: none; }
+  .ledger-table .num { font-family: 'DM Mono', monospace; text-align: right; }
+  .ledger-table .balance-due { color: var(--red); font-weight: 600; }
+  .ledger-table .balance-ok { color: var(--green-dark); font-weight: 600; }
+  .ledger-table tr:hover td { background: var(--bg); }
+
+  /* ══ EMPTY STATE ══ */
+  .empty-state { text-align: center; padding: 48px 20px; color: var(--text-3); }
+  .empty-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.45; }
+
+  /* ══ NOTIFICATION ══ */
+  .notif { position: fixed; bottom: calc(var(--tab-h) + 12px); left: 14px; right: 14px; background: #0D4A7A; color: #fff; padding: 13px 16px; border-radius: var(--radius); font-size: 14px; font-weight: 500; z-index: 300; box-shadow: 0 4px 20px rgba(0,0,0,0.2); transform: translateY(20px); opacity: 0; transition: all 0.22s; }
+  .notif.show { transform: translateY(0); opacity: 1; }
+
+  /* ══ PAYMENT TYPE RADIO ══ */
+  .type-radios { display: flex; gap: 8px; }
+  .type-radio-label { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 6px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; cursor: pointer; text-align: center; transition: all 0.12s; }
+  .type-radio-label input { display: none; }
+  .type-radio-label.selected { border-color: var(--blue); background: var(--blue-light); color: var(--blue); }
+
+  /* ══ INFO BANNER ══ */
+  .info-banner { background: var(--blue-light); border: 1px solid #B3CDE8; border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; color: var(--blue); }
+  .warn-banner { background: var(--amber-light); border: 1px solid #F0C040; border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; color: var(--amber); }
+
+  /* ══ DESKTOP OVERRIDES ══ */
+  @media (min-width: 700px) {
+    html, body { overflow: auto; height: auto; }
+    .tab-bar { display: none; }
+    .drawer { left: 0 !important; width: 230px; box-shadow: none; }
+    .drawer-overlay { display: none !important; }
+    .topbar { left: 230px; padding: 0 20px; }
+    .topbar-menu-btn { display: none; }
+    .main { left: 230px; top: var(--top-h); bottom: 0; position: fixed; }
+    .content { padding: 20px 24px; }
+    .fab { bottom: 24px; }
+    .notif { left: 254px; right: 24px; bottom: 24px; }
+    .modal-overlay { align-items: center; }
+    .modal { border-radius: 16px; max-width: 600px; }
+    .modal.modal-large { max-width: 720px; }
+    .stats-row { grid-template-columns: repeat(4, 1fr); }
+    .field-row { grid-template-columns: 1fr 1fr; }
+    .detail-fields { display: grid; grid-template-columns: 1fr 1fr; }
+    .detail-field { border-right: 1px solid var(--border); }
+    .detail-field:nth-child(even) { border-right: none; }
+    .detail-field { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+    .detail-field-value { text-align: left; }
+  }
+
+  @media (max-width: 699px) {
+    .field-row { grid-template-columns: 1fr; }
+    .type-radios { flex-direction: column; }
+  }
+</style>
+
+<!-- ══ HOME SCREEN ICON + WEB APP MANIFEST ══ -->
+<script>
+(function() {
+  var sz = 192, r = 40;
+  var c = document.createElement('canvas');
+  c.width = c.height = sz;
+  var ctx = c.getContext('2d');
+
+  // Rounded-square background (blue #0D4A7A)
+  ctx.fillStyle = '#0D4A7A';
+  ctx.beginPath();
+  ctx.moveTo(r, 0); ctx.lineTo(sz - r, 0); ctx.quadraticCurveTo(sz, 0, sz, r);
+  ctx.lineTo(sz, sz - r); ctx.quadraticCurveTo(sz, sz, sz - r, sz);
+  ctx.lineTo(r, sz); ctx.quadraticCurveTo(0, sz, 0, sz - r);
+  ctx.lineTo(0, r); ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath(); ctx.fill();
+
+  // Coin / payment symbol (white)
+  var cx = sz / 2, cy = sz * 0.46;
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 10;
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.beginPath(); ctx.arc(cx, cy, sz * 0.30, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // ₹ symbol
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 68px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('₹', cx, cy + 2);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('PAYMENTS', cx, sz * 0.87);
+
+  var dataUrl = c.toDataURL('image/png');
+
+  var appleLink = document.createElement('link');
+  appleLink.rel = 'apple-touch-icon'; appleLink.href = dataUrl;
+  document.head.appendChild(appleLink);
+
+  var manifest = {
+    name: 'Payments Manager', short_name: 'Payments',
+    description: 'Accounts payable — vendor bills and payments',
+    start_url: './', display: 'standalone', orientation: 'portrait',
+    background_color: '#0D4A7A', theme_color: '#0D4A7A',
+    icons: [{ src: dataUrl, sizes: '192x192', type: 'image/png', purpose: 'any maskable' }]
+  };
+  var blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+  var mLink = document.createElement('link');
+  mLink.rel = 'manifest'; mLink.href = URL.createObjectURL(blob);
+  document.head.appendChild(mLink);
+
+  var favLink = document.createElement('link');
+  favLink.rel = 'icon'; favLink.type = 'image/svg+xml';
+  favLink.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230D4A7A'/><text y='72' x='50' text-anchor='middle' font-size='62' font-family='sans-serif'>💳</text></svg>";
+  document.head.appendChild(favLink);
+})();
+</script>
+
+</head>
+<body>
+
+<!-- Drawer overlay -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+
+<!-- Slide-in drawer -->
+<nav class="drawer" id="drawer">
+  <div class="drawer-header">
+    <div class="drawer-logo">
+      <div class="drawer-logo-icon">💳</div>
+      <div>
+        <div class="drawer-logo-text">Payments Manager</div>
+        <div class="drawer-logo-sub">Accounts Payable</div>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-section">
+    <div class="drawer-label">AP Workflow</div>
+    <button class="drawer-item" onclick="navTo('dashboard')"><span class="drawer-item-icon">📊</span> Dashboard</button>
+    <button class="drawer-item" onclick="navTo('bills')"><span class="drawer-item-icon">🧾</span> Vendor Bills</button>
+    <button class="drawer-item" onclick="navTo('payments')"><span class="drawer-item-icon">💸</span> Payments</button>
+    <button class="drawer-item" onclick="navTo('ledger')"><span class="drawer-item-icon">📒</span> Vendor Ledger</button>
+  </div>
+  <div class="drawer-section" style="margin-top:auto;padding-bottom:20px;">
+    <div class="drawer-label">Links</div>
+    <button class="drawer-item" onclick="window.open('procurement_app_13.html','_blank')"><span class="drawer-item-icon">🏗️</span> Procurement App</button>
+  </div>
+</nav>
+
+<!-- Top bar -->
+<header class="topbar">
+  <button class="topbar-menu-btn" onclick="openDrawer()" aria-label="Menu">☰</button>
+  <span class="topbar-title" id="topbar-title">Dashboard</span>
+  <div class="topbar-actions">
+    <span id="site-chip" style="font-size:11px;font-weight:600;background:rgba(255,255,255,0.18);color:#fff;padding:3px 9px;border-radius:10px;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;"></span>
+    <button class="topbar-icon-btn" onclick="manualRefresh()" title="Load latest data from server" style="font-size:16px;">↻</button>
+    <button class="topbar-icon-btn" id="user-pill" title="Logged in" onclick="confirmLogout()">👤 <span id="user-pill-name" style="font-size:13px;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span></button>
+    <button class="topbar-icon-btn" title="Google Sheets connection"><span class="gs-dot disconnected" id="gs-dot"></span></button>
+  </div>
+</header>
+
+<!-- Main content -->
+<main class="main" id="main-scroll">
+  <div class="content" id="page-content"></div>
+</main>
+
+<!-- Bottom tab bar -->
+<nav class="tab-bar" id="tab-bar">
+  <button class="tab-item active" id="tab-dashboard" onclick="navTo('dashboard')">
+    <span class="tab-item-icon">📊</span><span>Home</span>
+  </button>
+  <button class="tab-item" id="tab-bills" onclick="navTo('bills')">
+    <span class="tab-item-icon">🧾</span><span>Bills</span>
+  </button>
+  <button class="tab-item" id="tab-payments" onclick="navTo('payments')">
+    <span class="tab-item-icon">💸</span><span>Payments</span>
+  </button>
+  <button class="tab-item" id="tab-ledger" onclick="navTo('ledger')">
+    <span class="tab-item-icon">📒</span><span>Ledger</span>
+  </button>
+</nav>
+
+<!-- Login Screen -->
+<div class="login-screen" id="login-screen" style="display:none;">
+  <div class="login-card">
+    <div class="login-logo">💳</div>
+    <div class="login-title">Payments Manager</div>
+    <div id="login-connecting" style="display:none;text-align:center;padding:16px 0 8px;">
+      <div style="font-size:28px;margin-bottom:10px;">⏳</div>
+      <div style="font-size:14px;font-weight:600;color:var(--text);">Connecting to Google Sheets…</div>
+      <div style="font-size:12px;color:var(--text-2);margin-top:4px;">Fetching latest data</div>
+    </div>
+    <div id="login-form">
+      <div class="login-sub">Sign in to continue</div>
+      <div class="login-field">
+        <label>Your Name</label>
+        <select id="login-name" onchange="document.getElementById('login-pin').value=''">
+          <option value="">Select your name</option>
+        </select>
+      </div>
+      <div class="login-field">
+        <label>Site</label>
+        <select id="login-site"><option value="">Select site</option></select>
+      </div>
+      <div class="login-field">
+        <label>PIN</label>
+        <input type="password" id="login-pin" maxlength="12" placeholder="Enter your PIN"
+          onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <div class="login-error" id="login-error"></div>
+      <button class="login-btn" onclick="doLogin()">Sign In</button>
+    </div>
+  </div>
+</div>
+
+<!-- Notification -->
+<div class="notif" id="notif"></div>
+
+<!-- Full-screen blocking overlay -->
+<div id="action-overlay">
+  <div class="spinner"></div>
+  <div id="action-overlay-label">Saving…</div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModalOnOverlay(event)">
+  <div class="modal" id="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">Form</span>
+      <button class="btn btn-secondary btn-sm btn-icon" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════
+//  CONFIG
+// ══════════════════════════════════════════
+const CONFIG = {
+  gsScriptUrl: 'https://script.google.com/macros/s/AKfycbwvsVNN9MJPm0sHY1DsvzHFiqB-zL6H41t2utxdHHEcTARgrAnt1pCQmYADwQNoeQ_0/exec',
+  adminPinHash: 'afd679cd3f9a81fd9ce02e6434a24f848937f09909fabcc3b3781e06036e284c', // = 1234
+};
+
+// ══════════════════════════════════════════
+//  PIN HASHING
+// ══════════════════════════════════════════
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+// ══════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════
+const APP = {
+  gsConnected: !!CONFIG.gsScriptUrl,
+  gsScriptUrl: CONFIG.gsScriptUrl,
+  currentPage: 'dashboard',
+  currentUser: '',
+  currentSite: '',
+
+  masterData: {
+    teamMembers: [],
+    vendors: [],
+    materials: [],
+    sites: [],
+    paymentModes: [],
+    laborTypes: [],
+  },
+
+  records: {
+    bills: [],      // VendorBill records (writable)
+    payments: [],   // Payment records (writable)
+    pos: [],        // PurchaseOrders (read-only mirror)
+    mres: [],       // SiteReceipts (read-only mirror)
+  },
+
+  counters: { VB: 0, PMT: 0 },
+
+  filters: {
+    bills:    { vendor: '', status: '' },
+    payments: { vendor: '', type: '' },
+    ledger:   { vendor: '' },
+  },
+};
+
+function nextId(prefix) {
+  APP.counters[prefix]++;
+  return `${prefix}-${String(APP.counters[prefix]).padStart(3,'0')}`;
+}
+
+function today() { return new Date().toISOString().slice(0,10); }
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function fmtAmt(n) {
+  if (n === undefined || n === null || n === '') return '—';
+  return '₹' + Number(n).toLocaleString('en-IN');
+}
+
+// ══════════════════════════════════════════
+//  COMPUTED HELPERS
+// ══════════════════════════════════════════
+function getBillPaidAmount(billId) {
+  return APP.records.payments.reduce((sum, pmt) => {
+    const alloc = (pmt.allocations||[]).find(a => a.billId === billId);
+    return sum + (alloc ? parseFloat(alloc.amount)||0 : 0);
+  }, 0);
+}
+
+function getBillBalance(bill) {
+  return (parseFloat(bill.amount)||0) - getBillPaidAmount(bill.id);
+}
+
+function getBillDisplayStatus(bill) {
+  if (bill.status === 'disputed') return 'disputed';
+  const paid = getBillPaidAmount(bill.id);
+  const balance = (parseFloat(bill.amount)||0) - paid;
+  if (paid > 0 && balance < 0.005) return 'paid';
+  if (paid > 0) return 'partial';
+  if (bill.status === 'approved') return 'approved';
+  return 'received';
+}
+
+function isOverdue(bill) {
+  const status = getBillDisplayStatus(bill);
+  if (status === 'paid' || status === 'disputed') return false;
+  if (!bill.dueDate) return false;
+  return bill.dueDate < today();
+}
+
+function isApprover() {
+  if (!APP.currentUser) return false;
+  const member = (APP.masterData.teamMembers||[]).find(m => m.name === APP.currentUser);
+  return member?.approver === true;
+}
+
+// ══════════════════════════════════════════
+//  LOCAL STORAGE
+// ══════════════════════════════════════════
+const LS_KEY = 'payments_app';
+
+function saveLocal() {
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    records: APP.records,
+    masterData: APP.masterData,
+    counters: APP.counters,
+  }));
+}
+
+function loadLocal() {
+  const s = localStorage.getItem(LS_KEY);
+  if (!s) return;
+  try {
+    const d = JSON.parse(s);
+    if (d.records) {
+      APP.records.bills    = d.records.bills    || [];
+      APP.records.payments = d.records.payments || [];
+      APP.records.pos      = d.records.pos      || [];
+      APP.records.mres     = d.records.mres     || [];
+    }
+    if (d.masterData) {
+      APP.masterData = { ...APP.masterData, ...d.masterData };
+      (APP.masterData.teamMembers||[]).forEach(m => { if (m.approver === undefined) m.approver = false; });
+      if (!APP.masterData.paymentModes) APP.masterData.paymentModes = [];
+    }
+    if (d.counters) APP.counters = { ...APP.counters, ...d.counters };
+  } catch(e) { console.warn('loadLocal failed:', e); }
+}
+
+// ══════════════════════════════════════════
+//  ROUTING
+// ══════════════════════════════════════════
+function openDrawer() {
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('drawer-overlay').classList.add('open');
+}
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('drawer-overlay').classList.remove('open');
+}
+function navTo(page) { closeDrawer(); navigate(page); }
+
+function updateTabBar(page) {
+  ['dashboard','bills','payments','ledger'].forEach(t => {
+    const el = document.getElementById('tab-' + t);
+    if (el) el.classList.toggle('active', t === page);
+  });
+}
+
+function updateDrawerActive(page) {
+  document.querySelectorAll('.drawer-item').forEach(b => b.classList.remove('active'));
+  const sel = document.querySelector(`.drawer-item[onclick*="'${page}'"]`);
+  if (sel) sel.classList.add('active');
+}
+
+function navigate(page) {
+  if (!APP.currentUser || !APP.currentSite) { showLoginScreen(); return; }
+  APP.currentPage = page;
+  const titles = { dashboard:'Dashboard', bills:'Vendor Bills', payments:'Payments', ledger:'Vendor Ledger' };
+  document.getElementById('topbar-title').textContent = titles[page] || page;
+  updateGsStatus();
+  updateTabBar(page);
+  updateDrawerActive(page);
+  document.getElementById('main-scroll').scrollTop = 0;
+  render(page);
+}
+
+function updateGsStatus() {
+  const dot = document.getElementById('gs-dot');
+  if (dot) dot.className = APP.gsConnected ? 'gs-dot' : 'gs-dot disconnected';
+}
+
+function updateUserPill() {
+  const nameEl = document.getElementById('user-pill-name');
+  if (nameEl) nameEl.textContent = APP.currentUser || '';
+  const chip = document.getElementById('site-chip');
+  if (chip) {
+    chip.textContent = APP.currentSite || '';
+    chip.style.display = APP.currentSite ? '' : 'none';
+  }
+}
+
+function confirmLogout() {
+  if (!confirm('Log out?')) return;
+  APP.currentUser = '';
+  APP.currentSite = '';
+  showLoginScreen();
+}
+
+function setFilter(page, field, value) {
+  APP.filters[page][field] = value;
+  render(APP.currentPage);
+}
+
+// ══════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════
+function showConnectingScreen() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-connecting').style.display = '';
+  document.getElementById('login-form').style.display = 'none';
+}
+
+function showLoginScreen() {
+  const sel = document.getElementById('login-name');
+  const members = APP.masterData.teamMembers || [];
+  sel.innerHTML = '<option value="">Select your name</option>' +
+    members.map(m => `<option value="${m.id}">${m.name}${m.role ? ' — ' + m.role : ''}</option>`).join('');
+  const siteSel = document.getElementById('login-site');
+  const sites = APP.masterData.sites || [];
+  siteSel.innerHTML = '<option value="">Select site</option>' +
+    sites.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  document.getElementById('login-pin').value = '';
+  document.getElementById('login-error').textContent = '';
+  document.getElementById('login-connecting').style.display = 'none';
+  document.getElementById('login-form').style.display = '';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function hideLoginScreen() {
+  document.getElementById('login-screen').style.display = 'none';
+}
+
+async function doLogin() {
+  const memberId = document.getElementById('login-name').value;
+  const site     = document.getElementById('login-site').value;
+  const pin      = document.getElementById('login-pin').value;
+  const errEl    = document.getElementById('login-error');
+  if (!memberId) { errEl.textContent = 'Please select your name.'; return; }
+  if (!site)     { errEl.textContent = 'Please select a site.'; return; }
+  if (!pin)      { errEl.textContent = 'Please enter your PIN.'; return; }
+  const member = (APP.masterData.teamMembers||[]).find(m => m.id === memberId);
+  if (!member) { errEl.textContent = 'User not found.'; return; }
+  if (!member.pinHash) { errEl.textContent = 'No PIN set. Ask your admin (in the Procurement app) to set one.'; return; }
+  const hash = await hashPin(pin);
+  if (hash !== member.pinHash) {
+    errEl.textContent = 'Incorrect PIN — try again.';
+    document.getElementById('login-pin').value = '';
+    document.getElementById('login-pin').focus();
+    return;
+  }
+  APP.currentUser = member.name;
+  APP.currentSite = site;
+  hideLoginScreen();
+  updateUserPill();
+  render(APP.currentPage);
+  notify(`Welcome, ${member.name} · ${site}`);
+}
+
+// ══════════════════════════════════════════
+//  MODAL
+// ══════════════════════════════════════════
+function openModal(title, body, footer, large) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal-footer').innerHTML = footer || '';
+  if (large) document.getElementById('modal').classList.add('modal-large');
+  else document.getElementById('modal').classList.remove('modal-large');
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  hideOverlay();
+}
+
+function closeModalOnOverlay(e) {
+  if (e.target === document.getElementById('modal-overlay')) closeModal();
+}
+
+function showOverlay(label='Saving…') {
+  document.getElementById('action-overlay-label').textContent = label;
+  document.getElementById('action-overlay').classList.add('active');
+}
+function hideOverlay() {
+  document.getElementById('action-overlay').classList.remove('active');
+}
+function setModalSaving(saving, label='Saving…') {
+  const btn = document.querySelector('#modal-footer .btn-primary');
+  if (btn) {
+    btn.disabled = saving;
+    if (saving) { btn.dataset.origText = btn.textContent; btn.textContent = label; }
+    else if (btn.dataset.origText) btn.textContent = btn.dataset.origText;
+  }
+  if (saving) showOverlay(label); else hideOverlay();
+}
+
+async function manualRefresh() {
+  showOverlay('Loading…');
+  await loadFromSheets();
+  hideOverlay();
+}
+
+// ══════════════════════════════════════════
+//  NOTIFICATION
+// ══════════════════════════════════════════
+let notifTimer;
+function notify(msg, isError=false) {
+  const el = document.getElementById('notif');
+  el.textContent = (isError ? '⚠ ' : '✓ ') + msg;
+  el.style.background = isError ? '#A32D2D' : '#0D4A7A';
+  el.classList.add('show');
+  clearTimeout(notifTimer);
+  notifTimer = setTimeout(() => el.classList.remove('show'), 3200);
+}
+
+// ══════════════════════════════════════════
+//  RENDER — DISPATCHER
+// ══════════════════════════════════════════
+function render(page) {
+  const el = document.getElementById('page-content');
+  switch(page) {
+    case 'dashboard': el.innerHTML = renderDashboard(); break;
+    case 'bills':     el.innerHTML = renderBills();     break;
+    case 'payments':  el.innerHTML = renderPayments();  break;
+    case 'ledger':    el.innerHTML = renderLedger();    break;
+  }
+}
+
+// ══════════════════════════════════════════
+//  RENDER — DASHBOARD
+// ══════════════════════════════════════════
+function renderDashboard() {
+  const site = APP.currentSite;
+  const siteBills = APP.records.bills.filter(b => b.site === site);
+  const siteMREs  = APP.records.mres.filter(m => m.site === site);
+
+  // 1. Overdue Bills
+  const overdue = siteBills.filter(b => isOverdue(b));
+
+  // 2. Awaiting Approval
+  const awaitingApproval = siteBills.filter(b => b.status === 'received');
+
+  // 3. Advances to Reconcile (advance payments with no allocations)
+  const advances = APP.records.payments.filter(p =>
+    p.site === site && p.paymentType === 'advance' && !(p.allocations||[]).length
+  );
+
+  // 4. MREs Without Bills
+  const mresWithBills = new Set(siteBills.flatMap(b => b.linkedMREs||[]));
+  const mresWithoutBills = siteMREs.filter(m => !mresWithBills.has(m.id));
+
+  // Recent activity
+  const recentBills = [...siteBills]
+    .sort((a,b) => (b.createdAt||'') > (a.createdAt||'') ? 1 : -1)
+    .slice(0, 3);
+  const recentPayments = [...APP.records.payments.filter(p => p.site === site)]
+    .sort((a,b) => (b.createdAt||'') > (a.createdAt||'') ? 1 : -1)
+    .slice(0, 3);
+
+  // Total billed and paid this site
+  const totalBilled = siteBills.reduce((s, b) => s + (parseFloat(b.amount)||0), 0);
+  const totalPaid   = APP.records.payments.filter(p => p.site === site)
+                        .reduce((s, p) => s + (parseFloat(p.amount)||0), 0);
+
+  return `
+    <div class="stats-row">
+      <div class="stat-card" onclick="navToFiltered('bills','status','overdue')">
+        <div class="stat-label">Overdue Bills</div>
+        <div class="stat-value ${overdue.length ? 'red' : 'green'}">${overdue.length}</div>
+        <div class="stat-sub">${overdue.length ? fmtAmt(overdue.reduce((s,b)=>s+getBillBalance(b),0)) + ' outstanding' : 'All clear'}</div>
+      </div>
+      <div class="stat-card" onclick="navToFiltered('bills','status','received')">
+        <div class="stat-label">Awaiting Approval</div>
+        <div class="stat-value ${awaitingApproval.length ? 'amber' : 'green'}">${awaitingApproval.length}</div>
+        <div class="stat-sub">${awaitingApproval.length ? 'Needs review' : 'All approved'}</div>
+      </div>
+      <div class="stat-card" onclick="navToFiltered('payments','type','advance')">
+        <div class="stat-label">Advances Open</div>
+        <div class="stat-value ${advances.length ? 'amber' : 'green'}">${advances.length}</div>
+        <div class="stat-sub">${advances.length ? fmtAmt(advances.reduce((s,p)=>s+(parseFloat(p.amount)||0),0)) : 'None pending'}</div>
+      </div>
+      <div class="stat-card" onclick="navTo('bills')">
+        <div class="stat-label">MREs w/o Bills</div>
+        <div class="stat-value ${mresWithoutBills.length ? 'amber' : 'green'}">${mresWithoutBills.length}</div>
+        <div class="stat-sub">${mresWithoutBills.length ? 'Bills pending' : 'All covered'}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+      <div style="background:var(--surface);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);">
+        <div class="stat-label">Total Billed</div>
+        <div style="font-size:18px;font-weight:600;font-family:'DM Mono',monospace;color:var(--text);margin-top:4px;">${fmtAmt(totalBilled)}</div>
+      </div>
+      <div style="background:var(--surface);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);">
+        <div class="stat-label">Total Paid</div>
+        <div style="font-size:18px;font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark);margin-top:4px;">${fmtAmt(totalPaid)}</div>
+      </div>
+    </div>
+
+    ${recentBills.length ? `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Recent Bills</div>
+      ${recentBills.map(b => {
+        const ds = getBillDisplayStatus(b);
+        return `<div class="record-card" style="margin-bottom:8px;" onclick="viewBill('${b.id}')">
+          <div class="record-card-top">
+            <div>
+              <div class="record-card-id">${b.id}</div>
+              <div class="record-card-title">${b.vendor}</div>
+              <div class="record-card-sub">${b.billNumber ? 'Bill #' + b.billNumber : 'No bill number'}</div>
+            </div>
+            <span class="badge badge-${ds}">${ds}</span>
+          </div>
+          <div class="record-card-bottom">
+            <span style="font-size:12px;color:var(--text-3);">${fmtDate(b.billDate)}</span>
+            <span class="record-card-amount ${ds==='paid'?'paid':''}">${fmtAmt(b.amount)}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+
+    ${recentPayments.length ? `
+    <div>
+      <div style="font-size:12px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Recent Payments</div>
+      ${recentPayments.map(p => `
+        <div class="record-card" style="margin-bottom:8px;" onclick="viewPayment('${p.id}')">
+          <div class="record-card-top">
+            <div>
+              <div class="record-card-id">${p.id}</div>
+              <div class="record-card-title">${p.vendor}</div>
+              <div class="record-card-sub">${fmtDate(p.paymentDate)}</div>
+            </div>
+            <span class="badge badge-${p.paymentType}">${p.paymentType.replace('-',' ')}</span>
+          </div>
+          <div class="record-card-bottom">
+            <span style="font-size:12px;color:var(--text-3);">${p.mode||''}</span>
+            <span class="record-card-amount paid">${fmtAmt(p.amount)}</span>
+          </div>
+        </div>`).join('')}
+    </div>` : ''}
+
+    ${!recentBills.length && !recentPayments.length ? `
+    <div class="empty-state">
+      <div class="empty-icon">💳</div>
+      <div style="font-weight:600;margin-bottom:6px;">No activity yet</div>
+      <div style="font-size:13px;">Create your first vendor bill to get started.</div>
+    </div>` : ''}`;
+}
+
+function navToFiltered(page, field, value) {
+  APP.filters[page][field] = value === 'overdue' ? '' : value;
+  // for overdue we just navigate to bills — the render fn can handle showing a banner
+  navigate(page);
+}
+
+// ══════════════════════════════════════════
+//  RENDER — BILLS
+// ══════════════════════════════════════════
+function renderBills() {
+  const site = APP.currentSite;
+  let bills = APP.records.bills.filter(b => b.site === site);
+
+  const { vendor: fv, status: fs } = APP.filters.bills;
+  const vendors = [...new Set(bills.map(b => b.vendor))].sort();
+
+  if (fv) bills = bills.filter(b => b.vendor === fv);
+  if (fs) {
+    if (fs === 'overdue') bills = bills.filter(b => isOverdue(b));
+    else bills = bills.filter(b => getBillDisplayStatus(b) === fs);
+  }
+
+  bills = [...bills].sort((a,b) => (b.createdAt||'') > (a.createdAt||'') ? 1 : -1);
+
+  const filterHtml = `
+    <div class="filter-bar">
+      <select class="filter-select${fv?' active':''}" onchange="setFilter('bills','vendor',this.value)">
+        <option value="">All Vendors</option>
+        ${vendors.map(v => `<option value="${v}" ${v===fv?'selected':''}>${v}</option>`).join('')}
+      </select>
+      <select class="filter-select${fs?' active':''}" onchange="setFilter('bills','status',this.value)">
+        <option value="">All Statuses</option>
+        ${['received','approved','partial','paid','disputed','overdue'].map(s =>
+          `<option value="${s}" ${s===fs?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
+        ).join('')}
+      </select>
+    </div>`;
+
+  if (!bills.length) return `
+    <div class="page-header"><div><h2>Vendor Bills</h2><p>${site}</p></div></div>
+    ${filterHtml}
+    <div class="empty-state"><div class="empty-icon">🧾</div><div style="font-weight:600;margin-bottom:6px;">No bills found</div><div style="font-size:13px;">Tap + to record a vendor bill.</div></div>
+    <button class="fab" onclick="openBillModal()">＋</button>`;
+
+  return `
+    <div class="page-header"><div><h2>Vendor Bills</h2><p>${bills.length} bill${bills.length!==1?'s':''} · ${site}</p></div></div>
+    ${filterHtml}
+    <div class="record-list">
+      ${bills.map(b => {
+        const ds = getBillDisplayStatus(b);
+        const balance = getBillBalance(b);
+        const od = isOverdue(b);
+        return `<div class="record-card" onclick="viewBill('${b.id}')">
+          <div class="record-card-top">
+            <div>
+              <div class="record-card-id">${b.id}${b.billNumber ? ' · #'+b.billNumber : ''}</div>
+              <div class="record-card-title">${b.vendor}</div>
+              <div class="record-card-sub">${b.billDate ? fmtDate(b.billDate) : '—'}${b.dueDate ? ' · Due '+fmtDate(b.dueDate) : ''}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+              <span class="badge badge-${ds}">${ds}</span>
+              ${od ? '<span class="badge badge-overdue">Overdue</span>' : ''}
+            </div>
+          </div>
+          <div class="record-card-bottom">
+            <span style="font-size:12px;color:var(--text-3);">Bill: ${fmtAmt(b.amount)}</span>
+            ${ds !== 'paid' && ds !== 'received' ? `<span style="font-size:12px;color:var(--red);">Balance: ${fmtAmt(balance)}</span>` : ''}
+            <span class="record-card-amount ${ds==='paid'?'paid':''}">${fmtAmt(b.amount)}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <button class="fab" onclick="openBillModal()">＋</button>`;
+}
+
+// ══════════════════════════════════════════
+//  RENDER — PAYMENTS
+// ══════════════════════════════════════════
+function renderPayments() {
+  const site = APP.currentSite;
+  let pmts = APP.records.payments.filter(p => p.site === site);
+
+  const { vendor: fv, type: ft } = APP.filters.payments;
+  const vendors = [...new Set(pmts.map(p => p.vendor))].sort();
+
+  if (fv) pmts = pmts.filter(p => p.vendor === fv);
+  if (ft) pmts = pmts.filter(p => p.paymentType === ft);
+
+  pmts = [...pmts].sort((a,b) => (b.createdAt||'') > (a.createdAt||'') ? 1 : -1);
+
+  const filterHtml = `
+    <div class="filter-bar">
+      <select class="filter-select${fv?' active':''}" onchange="setFilter('payments','vendor',this.value)">
+        <option value="">All Vendors</option>
+        ${vendors.map(v => `<option value="${v}" ${v===fv?'selected':''}>${v}</option>`).join('')}
+      </select>
+      <select class="filter-select${ft?' active':''}" onchange="setFilter('payments','type',this.value)">
+        <option value="">All Types</option>
+        <option value="advance" ${ft==='advance'?'selected':''}>Advance</option>
+        <option value="against-bill" ${ft==='against-bill'?'selected':''}>Against Bill</option>
+        <option value="against-receipt" ${ft==='against-receipt'?'selected':''}>Against Receipt</option>
+      </select>
+    </div>`;
+
+  if (!pmts.length) return `
+    <div class="page-header"><div><h2>Payments</h2><p>${site}</p></div></div>
+    ${filterHtml}
+    <div class="empty-state"><div class="empty-icon">💸</div><div style="font-weight:600;margin-bottom:6px;">No payments yet</div><div style="font-size:13px;">Tap + to record a payment.</div></div>
+    <button class="fab" onclick="openPaymentModal()">＋</button>`;
+
+  return `
+    <div class="page-header"><div><h2>Payments</h2><p>${pmts.length} payment${pmts.length!==1?'s':''} · ${site}</p></div></div>
+    ${filterHtml}
+    <div class="record-list">
+      ${pmts.map(p => `
+        <div class="record-card" onclick="viewPayment('${p.id}')">
+          <div class="record-card-top">
+            <div>
+              <div class="record-card-id">${p.id}</div>
+              <div class="record-card-title">${p.vendor}</div>
+              <div class="record-card-sub">${fmtDate(p.paymentDate)}${p.reference ? ' · Ref: '+p.reference : ''}</div>
+            </div>
+            <span class="badge badge-${p.paymentType}">${p.paymentType.replace(/-/g,' ')}</span>
+          </div>
+          <div class="record-card-bottom">
+            <span style="font-size:12px;color:var(--text-3);">${p.mode||'—'}</span>
+            ${(p.allocations||[]).length ? `<span style="font-size:12px;color:var(--text-3);">${p.allocations.length} bill${p.allocations.length!==1?'s':''}</span>` : ''}
+            <span class="record-card-amount paid">${fmtAmt(p.amount)}</span>
+          </div>
+        </div>`).join('')}
+    </div>
+    <button class="fab" onclick="openPaymentModal()">＋</button>`;
+}
+
+// ══════════════════════════════════════════
+//  RENDER — VENDOR LEDGER
+// ══════════════════════════════════════════
+function renderLedger() {
+  const site = APP.currentSite;
+  const { vendor: fv } = APP.filters.ledger;
+
+  // Build per-vendor summary
+  const ledger = {};
+  const ensure = v => {
+    if (!ledger[v]) ledger[v] = { ordered: 0, billed: 0, paid: 0 };
+  };
+
+  // Ordered (from POs)
+  APP.records.pos.filter(p => p.site === site).forEach(p => {
+    if (!p.vendor) return;
+    ensure(p.vendor);
+    ledger[p.vendor].ordered += parseFloat(p.amount)||0;
+  });
+
+  // Billed (from VendorBills)
+  APP.records.bills.filter(b => b.site === site).forEach(b => {
+    ensure(b.vendor);
+    ledger[b.vendor].billed += parseFloat(b.amount)||0;
+  });
+
+  // Paid (from Payments)
+  APP.records.payments.filter(p => p.site === site).forEach(p => {
+    ensure(p.vendor);
+    ledger[p.vendor].paid += parseFloat(p.amount)||0;
+  });
+
+  let vendors = Object.keys(ledger).sort();
+  if (fv) vendors = vendors.filter(v => v === fv);
+
+  const filterHtml = `
+    <div class="filter-bar">
+      <select class="filter-select${fv?' active':''}" onchange="setFilter('ledger','vendor',this.value)">
+        <option value="">All Vendors</option>
+        ${Object.keys(ledger).sort().map(v => `<option value="${v}" ${v===fv?'selected':''}>${v}</option>`).join('')}
+      </select>
+    </div>`;
+
+  if (!vendors.length) return `
+    <div class="page-header"><div><h2>Vendor Ledger</h2><p>${site}</p></div></div>
+    ${filterHtml}
+    <div class="empty-state"><div class="empty-icon">📒</div><div style="font-weight:600;margin-bottom:6px;">No vendor data yet</div><div style="font-size:13px;">Bills and payments will appear here.</div></div>`;
+
+  const rows = vendors.map(v => {
+    const { ordered, billed, paid } = ledger[v];
+    const balance = billed - paid;
+    return `<tr>
+      <td style="font-weight:500;">${v}</td>
+      <td class="num">${fmtAmt(ordered)}</td>
+      <td class="num">${fmtAmt(billed)}</td>
+      <td class="num">${fmtAmt(paid)}</td>
+      <td class="num ${balance > 0.005 ? 'balance-due' : 'balance-ok'}">${fmtAmt(balance)}</td>
+    </tr>`;
+  }).join('');
+
+  const totOrdered = vendors.reduce((s,v)=>s+ledger[v].ordered, 0);
+  const totBilled  = vendors.reduce((s,v)=>s+ledger[v].billed,  0);
+  const totPaid    = vendors.reduce((s,v)=>s+ledger[v].paid,    0);
+  const totBal     = totBilled - totPaid;
+
+  return `
+    <div class="page-header"><div><h2>Vendor Ledger</h2><p>${site}</p></div></div>
+    ${filterHtml}
+    <div class="ledger-table-wrap">
+      <table class="ledger-table">
+        <thead><tr>
+          <th>Vendor</th>
+          <th style="text-align:right;">Ordered</th>
+          <th style="text-align:right;">Billed</th>
+          <th style="text-align:right;">Paid</th>
+          <th style="text-align:right;">Balance Due</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr style="background:var(--bg);">
+          <td style="font-weight:700;font-size:13px;">Total</td>
+          <td class="num" style="font-weight:700;">${fmtAmt(totOrdered)}</td>
+          <td class="num" style="font-weight:700;">${fmtAmt(totBilled)}</td>
+          <td class="num" style="font-weight:700;">${fmtAmt(totPaid)}</td>
+          <td class="num ${totBal>0.005?'balance-due':'balance-ok'}" style="font-weight:700;">${fmtAmt(totBal)}</td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+}
+
+// ══════════════════════════════════════════
+//  BILL MODAL — CREATE / EDIT
+// ══════════════════════════════════════════
+function openBillModal(id) {
+  const existing = id ? APP.records.bills.find(b => b.id === id) : null;
+  const vendors = APP.masterData.vendors || [];
+  const initVendor = existing?.vendor || '';
+
+  const vendorOpts = vendors.map(v =>
+    `<option value="${v.name}" ${v.name===initVendor?'selected':''}>${v.name}</option>`
+  ).join('');
+
+  const poLinksHtml = buildPOLinkList(initVendor, existing?.linkedPOs||[]);
+  const mreLinksHtml = buildMRELinkList(initVendor, existing?.linkedMREs||[]);
+
+  const body = `
+    <div class="field-group">
+      <label>Vendor *</label>
+      <select id="b-vendor" onchange="onBillVendorChange()">
+        <option value="">Select vendor</option>
+        ${vendorOpts}
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field-group">
+        <label>Bill Number</label>
+        <input type="text" id="b-billno" placeholder="e.g. INV-2024-001" value="${existing?.billNumber||''}">
+      </div>
+      <div class="field-group">
+        <label>Amount (₹) *</label>
+        <input type="number" id="b-amount" min="0" step="0.01" placeholder="0.00" value="${existing?.amount||''}">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field-group">
+        <label>Bill Date *</label>
+        <input type="date" id="b-billdate" value="${existing?.billDate||today()}">
+      </div>
+      <div class="field-group">
+        <label>Due Date</label>
+        <input type="date" id="b-duedate" value="${existing?.dueDate||''}">
+      </div>
+    </div>
+    <div class="field-group">
+      <label>Link Purchase Orders</label>
+      <div id="b-po-list">${poLinksHtml}</div>
+    </div>
+    <div class="field-group">
+      <label>Link Site Receipts</label>
+      <div id="b-mre-list">${mreLinksHtml}</div>
+    </div>
+    <div class="field-group">
+      <label>Remarks</label>
+      <textarea id="b-remarks" placeholder="Optional notes">${existing?.remarks||''}</textarea>
+    </div>`;
+
+  openModal(existing ? `Edit ${id}` : 'New Vendor Bill', body,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="saveBill('${id||''}')">Save Bill</button>`,
+    true);
+}
+
+function buildPOLinkList(vendor, selected) {
+  const pos = APP.records.pos.filter(p => p.site === APP.currentSite && (!vendor || p.vendor === vendor));
+  if (!pos.length) return `<div class="link-empty">No POs found${vendor ? ' for ' + vendor : ' — select a vendor first'}</div>`;
+  return `<div class="link-list">${pos.map(p => `
+    <label class="link-item">
+      <input type="checkbox" value="${p.id}" ${selected.includes(p.id)?'checked':''}>
+      <div class="link-item-label">
+        <strong>${p.id}</strong> — ${fmtDate(p.date)}
+        <div class="link-item-sub">${fmtAmt(p.amount)} · ${p.status}</div>
+      </div>
+    </label>`).join('')}</div>`;
+}
+
+function buildMRELinkList(vendor, selected) {
+  const mres = APP.records.mres.filter(m => m.site === APP.currentSite && (!vendor || m.vendor === vendor));
+  if (!mres.length) return `<div class="link-empty">No MREs found${vendor ? ' for ' + vendor : ' — select a vendor first'}</div>`;
+  return `<div class="link-list">${mres.map(m => `
+    <label class="link-item">
+      <input type="checkbox" value="${m.id}" ${selected.includes(m.id)?'checked':''}>
+      <div class="link-item-label">
+        <strong>${m.id}</strong> — ${fmtDate(m.date)}
+        <div class="link-item-sub">${m.challan ? 'Challan: '+m.challan : ''}</div>
+      </div>
+    </label>`).join('')}</div>`;
+}
+
+function onBillVendorChange() {
+  const vendor = document.getElementById('b-vendor').value;
+  document.getElementById('b-po-list').innerHTML  = buildPOLinkList(vendor, []);
+  document.getElementById('b-mre-list').innerHTML = buildMRELinkList(vendor, []);
+}
+
+async function saveBill(id) {
+  const vendor   = document.getElementById('b-vendor').value.trim();
+  const billno   = document.getElementById('b-billno').value.trim();
+  const amount   = parseFloat(document.getElementById('b-amount').value) || 0;
+  const billDate = document.getElementById('b-billdate').value;
+  const dueDate  = document.getElementById('b-duedate').value;
+  const remarks  = document.getElementById('b-remarks').value.trim();
+
+  if (!vendor)   { notify('Please select a vendor.', true); return; }
+  if (!billDate) { notify('Please enter a bill date.', true); return; }
+  if (!amount)   { notify('Please enter a bill amount.', true); return; }
+
+  const linkedPOs  = [...document.querySelectorAll('#b-po-list  input[type=checkbox]:checked')].map(c => c.value);
+  const linkedMREs = [...document.querySelectorAll('#b-mre-list input[type=checkbox]:checked')].map(c => c.value);
+
+  const isNew = !id;
+  const now = new Date().toISOString();
+
+  let bill;
+  if (isNew) {
+    bill = {
+      id: nextId('VB'), vendor, billNumber: billno, billDate, dueDate, amount,
+      linkedPOs, linkedMREs, status: 'received',
+      submittedBy: APP.currentUser, approvedBy: '', approvedAt: '',
+      site: APP.currentSite, remarks, createdAt: now,
+    };
+    APP.records.bills.push(bill);
+  } else {
+    bill = APP.records.bills.find(b => b.id === id);
+    if (!bill) { notify('Bill not found.', true); return; }
+    bill.vendor = vendor; bill.billNumber = billno; bill.billDate = billDate;
+    bill.dueDate = dueDate; bill.amount = amount;
+    bill.linkedPOs = linkedPOs; bill.linkedMREs = linkedMREs; bill.remarks = remarks;
+  }
+
+  setModalSaving(true, 'Saving…');
+  const ok = await syncToSheets('VendorBills', bill);
+  setModalSaving(false);
+  if (!ok) { notify('Save failed — check connection.', true); return; }
+
+  saveLocal();
+  closeModal();
+  render(APP.currentPage);
+  notify(isNew ? `${bill.id} created` : `${bill.id} updated`);
+}
+
+// ══════════════════════════════════════════
+//  BILL DETAIL VIEW
+// ══════════════════════════════════════════
+function viewBill(id) {
+  const bill = APP.records.bills.find(b => b.id === id);
+  if (!bill) return;
+  const ds = getBillDisplayStatus(bill);
+  const paid = getBillPaidAmount(id);
+  const balance = getBillBalance(bill);
+  const od = isOverdue(bill);
+
+  // Payments that include allocations to this bill
+  const relPmts = APP.records.payments.filter(p =>
+    (p.allocations||[]).some(a => a.billId === id)
+  );
+
+  const body = `
+    <div class="detail-header">
+      <span class="detail-id-badge">${bill.id}</span>
+      <span class="badge badge-${ds}">${ds}</span>
+      ${od ? '<span class="badge badge-overdue">Overdue</span>' : ''}
+    </div>
+    <div class="detail-fields">
+      <div class="detail-field"><span class="detail-field-label">Vendor</span><span class="detail-field-value">${bill.vendor}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Bill Number</span><span class="detail-field-value">${bill.billNumber||'—'}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Bill Date</span><span class="detail-field-value">${fmtDate(bill.billDate)}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Due Date</span><span class="detail-field-value" style="${od?'color:var(--red);font-weight:700;':''}">${fmtDate(bill.dueDate)}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Amount</span><span class="detail-field-value" style="font-family:'DM Mono',monospace;">${fmtAmt(bill.amount)}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Amount Paid</span><span class="detail-field-value" style="color:var(--green-dark);font-family:'DM Mono',monospace;">${fmtAmt(paid)}</span></div>
+      ${balance > 0.005 ? `<div class="detail-field"><span class="detail-field-label">Balance Due</span><span class="detail-field-value" style="color:var(--red);font-family:'DM Mono',monospace;">${fmtAmt(balance)}</span></div>` : ''}
+      <div class="detail-field"><span class="detail-field-label">Submitted By</span><span class="detail-field-value">${bill.submittedBy||'—'}</span></div>
+      ${bill.approvedBy ? `<div class="detail-field"><span class="detail-field-label">Approved By</span><span class="detail-field-value">${bill.approvedBy} · ${fmtDate(bill.approvedAt?.slice(0,10))}</span></div>` : ''}
+      ${bill.remarks ? `<div class="detail-field" style="grid-column:1/-1;"><span class="detail-field-label">Remarks</span><span class="detail-field-value">${bill.remarks}</span></div>` : ''}
+    </div>
+
+    ${bill.linkedPOs?.length ? `
+      <div class="detail-section-label">Linked Purchase Orders</div>
+      <div class="detail-linked">
+        ${bill.linkedPOs.map(pid => `<button class="detail-linked-chip">${pid}</button>`).join('')}
+      </div>` : ''}
+
+    ${bill.linkedMREs?.length ? `
+      <div class="detail-section-label">Linked Site Receipts</div>
+      <div class="detail-linked">
+        ${bill.linkedMREs.map(mid => `<button class="detail-linked-chip">${mid}</button>`).join('')}
+      </div>` : ''}
+
+    ${relPmts.length ? `
+      <div class="detail-section-label">Payments</div>
+      ${relPmts.map(p => {
+        const alloc = (p.allocations||[]).find(a => a.billId === id);
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--bg);border-radius:8px;margin-bottom:6px;font-size:13px;cursor:pointer;" onclick="viewPayment('${p.id}')">
+          <div><strong style="font-family:'DM Mono',monospace;">${p.id}</strong> · ${fmtDate(p.paymentDate)}</div>
+          <div style="font-weight:600;color:var(--green-dark);font-family:'DM Mono',monospace;">${fmtAmt(alloc?.amount)}</div>
+        </div>`;
+      }).join('')}` : ''}`;
+
+  // Footer buttons
+  let footer = `<button class="btn btn-secondary" onclick="closeModal()">Close</button>`;
+  if (ds === 'received' && isApprover()) {
+    footer += `<button class="btn btn-success" onclick="approveBill('${id}')">✓ Approve</button>`;
+  }
+  if (ds !== 'disputed' && ds !== 'paid') {
+    footer += `<button class="btn btn-warning" onclick="disputeBill('${id}')">⚠ Dispute</button>`;
+  }
+  if (ds !== 'paid') {
+    footer += `<button class="btn btn-primary" onclick="closeModal();openPaymentModal(null,'${bill.vendor}','${id}')">Pay</button>`;
+  }
+  footer += `<button class="btn btn-danger btn-sm" onclick="deleteBill('${id}')">🗑</button>`;
+
+  openModal(`Bill ${id}`, body, footer, true);
+}
+
+async function approveBill(id) {
+  const bill = APP.records.bills.find(b => b.id === id);
+  if (!bill) return;
+  bill.status = 'approved';
+  bill.approvedBy = APP.currentUser;
+  bill.approvedAt = new Date().toISOString();
+  showOverlay('Approving…');
+  const ok = await syncToSheets('VendorBills', bill);
+  hideOverlay();
+  if (!ok) { bill.status = 'received'; bill.approvedBy = ''; bill.approvedAt = ''; notify('Approve failed', true); return; }
+  saveLocal();
+  closeModal();
+  render(APP.currentPage);
+  notify(`${id} approved`);
+}
+
+async function disputeBill(id) {
+  const reason = prompt(`Reason for disputing ${id} (optional):`);
+  if (reason === null) return; // cancelled
+  const bill = APP.records.bills.find(b => b.id === id);
+  if (!bill) return;
+  const prevStatus = bill.status;
+  bill.status = 'disputed';
+  if (reason) bill.remarks = (bill.remarks ? bill.remarks + '\n' : '') + 'Disputed: ' + reason;
+  showOverlay('Updating…');
+  const ok = await syncToSheets('VendorBills', bill);
+  hideOverlay();
+  if (!ok) { bill.status = prevStatus; notify('Update failed', true); return; }
+  saveLocal();
+  closeModal();
+  render(APP.currentPage);
+  notify(`${id} marked as disputed`);
+}
+
+async function deleteBill(id) {
+  // Check if any payments allocate to this bill
+  const hasPayments = APP.records.payments.some(p => (p.allocations||[]).some(a => a.billId === id));
+  if (hasPayments) { notify(`${id} has payments — remove them first.`, true); return; }
+  if (!confirm(`Delete ${id}? This cannot be undone.`)) return;
+  APP.records.bills = APP.records.bills.filter(b => b.id !== id);
+  closeModal();
+  render(APP.currentPage);
+  showOverlay('Deleting…');
+  _pendingDeletes.add(id);
+  setTimeout(() => _pendingDeletes.delete(id), 60000);
+  await deleteFromSheets('VendorBills', id);
+  hideOverlay();
+  notify(`${id} deleted`);
+}
+
+// ══════════════════════════════════════════
+//  PAYMENT MODAL — CREATE
+// ══════════════════════════════════════════
+function openPaymentModal(id, prefillVendor, prefillBillId) {
+  const existing = id ? APP.records.payments.find(p => p.id === id) : null;
+  const vendors = APP.masterData.vendors || [];
+  const modes   = APP.masterData.paymentModes || [];
+  const initVendor = existing?.vendor || prefillVendor || '';
+  const initType   = existing?.paymentType || 'against-bill';
+
+  const vendorOpts = vendors.map(v =>
+    `<option value="${v.name}" ${v.name===initVendor?'selected':''}>${v.name}</option>`
+  ).join('');
+  const modeOpts = modes.map(m =>
+    `<option value="${m.name}" ${m.name===(existing?.mode||'')?'selected':''}>${m.name}</option>`
+  ).join('');
+
+  const allocHtml = buildAllocTable(initVendor, existing?.allocations||[], prefillBillId);
+  const mreHtml   = buildPayMREList(initVendor, existing?.linkedMREs||[]);
+
+  const body = `
+    <div class="field-row">
+      <div class="field-group">
+        <label>Vendor *</label>
+        <select id="p-vendor" onchange="onPaymentVendorChange()">
+          <option value="">Select vendor</option>
+          ${vendorOpts}
+        </select>
+      </div>
+      <div class="field-group">
+        <label>Payment Date *</label>
+        <input type="date" id="p-date" value="${existing?.paymentDate||today()}">
+      </div>
+    </div>
+    <div class="field-group">
+      <label>Payment Type *</label>
+      <div class="type-radios" id="p-type-radios">
+        ${['advance','against-bill','against-receipt'].map(t => `
+          <label class="type-radio-label${t===initType?' selected':''}" onclick="onPayTypeClick('${t}')">
+            <input type="radio" name="p-type" value="${t}" ${t===initType?'checked':''}>
+            ${t==='advance'?'⬆ Advance':t==='against-bill'?'🧾 Bill':'📦 Receipt'}
+          </label>`).join('')}
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field-group">
+        <label>Amount (₹) *</label>
+        <input type="number" id="p-amount" min="0" step="0.01" placeholder="0.00" value="${existing?.amount||''}">
+      </div>
+      <div class="field-group">
+        <label>Payment Mode</label>
+        <select id="p-mode">
+          <option value="">Select mode</option>
+          ${modeOpts}
+          <option value="Cash">Cash</option>
+          <option value="Cheque">Cheque</option>
+          <option value="NEFT/RTGS">NEFT/RTGS</option>
+          <option value="UPI">UPI</option>
+        </select>
+      </div>
+    </div>
+    <div class="field-group">
+      <label>Reference / UTR</label>
+      <input type="text" id="p-ref" placeholder="Cheque no., UTR, transaction ID…" value="${existing?.reference||''}">
+    </div>
+    <div id="p-alloc-section" style="${initType==='against-bill'?'':'display:none;'}">
+      <div class="section-divider" style="margin-bottom:8px;">Bill Allocations</div>
+      <div id="p-alloc-wrap">${allocHtml}</div>
+    </div>
+    <div id="p-mre-section" style="${initType==='against-receipt'?'':'display:none;'}">
+      <div class="section-divider" style="margin-bottom:8px;">Linked MREs</div>
+      <div id="p-mre-list">${mreHtml}</div>
+    </div>
+    <div id="p-advance-section" style="${initType==='advance'?'':'display:none;'}">
+      <div class="info-banner">Advance payment will appear in Advances to Reconcile until linked to a bill.</div>
+    </div>
+    <div class="field-group">
+      <label>Remarks</label>
+      <textarea id="p-remarks" placeholder="Optional notes">${existing?.remarks||''}</textarea>
+    </div>`;
+
+  openModal(existing ? `Edit ${id}` : 'New Payment', body,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+     <button class="btn btn-primary" onclick="savePayment('${id||''}')">Save Payment</button>`,
+    true);
+}
+
+function buildAllocTable(vendor, existingAllocs, prefillBillId) {
+  // Show approved/partial bills for this vendor at this site with a balance
+  const bills = APP.records.bills.filter(b =>
+    b.site === APP.currentSite &&
+    (!vendor || b.vendor === vendor) &&
+    (b.status === 'approved' || getBillDisplayStatus(b) === 'partial') &&
+    getBillBalance(b) > 0.005
+  );
+
+  if (!bills.length && !vendor) return `<div class="link-empty">Select a vendor to see eligible bills</div>`;
+  if (!bills.length) return `<div class="link-empty">No approved bills with outstanding balance for ${vendor}</div>`;
+
+  const rows = bills.map(b => {
+    const balance = getBillBalance(b);
+    const existing = existingAllocs.find(a => a.billId === b.id);
+    const checked = existing || b.id === prefillBillId;
+    const allocAmt = existing ? existing.amount : (b.id === prefillBillId ? balance.toFixed(2) : '');
+    return `<tr>
+      <td><input type="checkbox" class="alloc-cb" data-id="${b.id}" ${checked?'checked':''} onchange="onAllocCheck(this)"></td>
+      <td>
+        <div style="font-weight:600;font-size:13px;font-family:'DM Mono',monospace;">${b.id}</div>
+        <div style="font-size:11px;color:var(--text-3);">#${b.billNumber||'—'} · ${fmtDate(b.billDate)}</div>
+      </td>
+      <td class="num">${fmtAmt(b.amount)}</td>
+      <td class="num" style="color:var(--red);">${fmtAmt(balance)}</td>
+      <td><input type="number" class="alloc-amt" data-id="${b.id}" min="0" step="0.01" placeholder="0.00"
+        value="${allocAmt}" style="${checked?'':'opacity:0.4;pointer-events:none;'}"></td>
+    </tr>`;
+  }).join('');
+
+  return `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm);">
+    <table class="alloc-table">
+      <thead><tr><th></th><th>Bill</th><th style="text-align:right;">Amount</th><th style="text-align:right;">Balance</th><th>Allocate ₹</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+  <div style="font-size:12px;color:var(--text-3);margin-top:6px;">Total allocated: <strong id="alloc-total">₹0</strong></div>`;
+}
+
+function buildPayMREList(vendor, selected) {
+  const mres = APP.records.mres.filter(m => m.site === APP.currentSite && (!vendor || m.vendor === vendor));
+  if (!mres.length && !vendor) return `<div class="link-empty">Select a vendor to see MREs</div>`;
+  if (!mres.length) return `<div class="link-empty">No MREs found for ${vendor}</div>`;
+  return `<div class="link-list">${mres.map(m => `
+    <label class="link-item">
+      <input type="checkbox" value="${m.id}" ${selected.includes(m.id)?'checked':''}>
+      <div class="link-item-label">
+        <strong>${m.id}</strong> — ${fmtDate(m.date)}
+        <div class="link-item-sub">${m.challan?'Challan: '+m.challan:''} ${m.vehicle?'· '+m.vehicle:''}</div>
+      </div>
+    </label>`).join('')}</div>`;
+}
+
+function onPayTypeClick(type) {
+  document.querySelectorAll('input[name="p-type"]').forEach(r => r.checked = r.value === type);
+  document.querySelectorAll('.type-radio-label').forEach(l => l.classList.toggle('selected', l.querySelector('input').value === type));
+  document.getElementById('p-alloc-section').style.display  = type === 'against-bill'    ? '' : 'none';
+  document.getElementById('p-mre-section').style.display    = type === 'against-receipt' ? '' : 'none';
+  document.getElementById('p-advance-section').style.display = type === 'advance'         ? '' : 'none';
+}
+
+function onPaymentVendorChange() {
+  const vendor = document.getElementById('p-vendor').value;
+  document.getElementById('p-alloc-wrap').innerHTML = buildAllocTable(vendor, [], null);
+  document.getElementById('p-mre-list').innerHTML   = buildPayMREList(vendor, []);
+}
+
+function onAllocCheck(cb) {
+  const amtInput = document.querySelector(`.alloc-amt[data-id="${cb.dataset.id}"]`);
+  if (!amtInput) return;
+  amtInput.style.opacity = cb.checked ? '1' : '0.4';
+  amtInput.style.pointerEvents = cb.checked ? 'auto' : 'none';
+  if (!cb.checked) amtInput.value = '';
+  updateAllocTotal();
+}
+
+function updateAllocTotal() {
+  const total = [...document.querySelectorAll('.alloc-amt')].reduce((s, inp) => {
+    const cb = document.querySelector(`.alloc-cb[data-id="${inp.dataset.id}"]`);
+    return s + (cb?.checked ? parseFloat(inp.value)||0 : 0);
+  }, 0);
+  const el = document.getElementById('alloc-total');
+  if (el) el.textContent = fmtAmt(total);
+}
+
+async function savePayment(id) {
+  const vendor = document.getElementById('p-vendor').value.trim();
+  const date   = document.getElementById('p-date').value;
+  const amount = parseFloat(document.getElementById('p-amount').value) || 0;
+  const mode   = document.getElementById('p-mode').value;
+  const ref    = document.getElementById('p-ref').value.trim();
+  const remarks = document.getElementById('p-remarks').value.trim();
+  const type   = document.querySelector('input[name="p-type"]:checked')?.value || 'advance';
+
+  if (!vendor) { notify('Please select a vendor.', true); return; }
+  if (!date)   { notify('Please enter a payment date.', true); return; }
+  if (!amount) { notify('Please enter a payment amount.', true); return; }
+
+  // Build allocations
+  let allocations = [];
+  if (type === 'against-bill') {
+    const cbs = [...document.querySelectorAll('.alloc-cb:checked')];
+    for (const cb of cbs) {
+      const amtEl = document.querySelector(`.alloc-amt[data-id="${cb.dataset.id}"]`);
+      const a = parseFloat(amtEl?.value) || 0;
+      if (a > 0) allocations.push({ billId: cb.dataset.id, amount: a });
+    }
+    if (!allocations.length) { notify('Please allocate the payment to at least one bill.', true); return; }
+    const totalAlloc = allocations.reduce((s, a) => s + a.amount, 0);
+    if (Math.abs(totalAlloc - amount) > 0.01) {
+      notify(`Allocation total (${fmtAmt(totalAlloc)}) must equal payment amount (${fmtAmt(amount)}).`, true); return;
+    }
+  }
+
+  // Build linked MREs
+  let linkedMREs = [];
+  if (type === 'against-receipt') {
+    linkedMREs = [...document.querySelectorAll('#p-mre-list input[type=checkbox]:checked')].map(c => c.value);
+  }
+
+  const isNew = !id;
+  const now = new Date().toISOString();
+
+  let pmt;
+  if (isNew) {
+    pmt = {
+      id: nextId('PMT'), vendor, paymentDate: date, paymentType: type,
+      amount, mode, reference: ref, allocations, linkedMREs,
+      site: APP.currentSite, remarks, createdBy: APP.currentUser, createdAt: now,
+    };
+    APP.records.payments.push(pmt);
+  } else {
+    pmt = APP.records.payments.find(p => p.id === id);
+    if (!pmt) { notify('Payment not found.', true); return; }
+    Object.assign(pmt, { vendor, paymentDate: date, paymentType: type, amount, mode, reference: ref, allocations, linkedMREs, remarks });
+  }
+
+  setModalSaving(true, 'Saving…');
+  const ok = await syncToSheets('Payments', pmt);
+  setModalSaving(false);
+  if (!ok) { notify('Save failed — check connection.', true); return; }
+
+  saveLocal();
+  closeModal();
+  render(APP.currentPage);
+  notify(isNew ? `${pmt.id} recorded` : `${pmt.id} updated`);
+}
+
+// ══════════════════════════════════════════
+//  PAYMENT DETAIL VIEW
+// ══════════════════════════════════════════
+function viewPayment(id) {
+  const pmt = APP.records.payments.find(p => p.id === id);
+  if (!pmt) return;
+
+  const allocRows = (pmt.allocations||[]).map(a => {
+    const bill = APP.records.bills.find(b => b.id === a.billId);
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:var(--bg);border-radius:8px;margin-bottom:6px;font-size:13px;cursor:pointer;" onclick="closeModal();viewBill('${a.billId}')">
+      <div><strong style="font-family:'DM Mono',monospace;">${a.billId}</strong>${bill ? ' · #'+(bill.billNumber||'—') : ''}</div>
+      <div style="font-weight:600;color:var(--blue);font-family:'DM Mono',monospace;">${fmtAmt(a.amount)}</div>
+    </div>`;
+  }).join('');
+
+  const body = `
+    <div class="detail-header">
+      <span class="detail-id-badge">${pmt.id}</span>
+      <span class="badge badge-${pmt.paymentType}">${pmt.paymentType.replace(/-/g,' ')}</span>
+    </div>
+    <div class="detail-fields">
+      <div class="detail-field"><span class="detail-field-label">Vendor</span><span class="detail-field-value">${pmt.vendor}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Date</span><span class="detail-field-value">${fmtDate(pmt.paymentDate)}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Amount</span><span class="detail-field-value" style="font-family:'DM Mono',monospace;color:var(--green-dark);">${fmtAmt(pmt.amount)}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Mode</span><span class="detail-field-value">${pmt.mode||'—'}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Reference</span><span class="detail-field-value">${pmt.reference||'—'}</span></div>
+      <div class="detail-field"><span class="detail-field-label">Created By</span><span class="detail-field-value">${pmt.createdBy||'—'}</span></div>
+      ${pmt.remarks ? `<div class="detail-field" style="grid-column:1/-1;"><span class="detail-field-label">Remarks</span><span class="detail-field-value">${pmt.remarks}</span></div>` : ''}
+    </div>
+
+    ${allocRows ? `<div class="detail-section-label">Bill Allocations</div>${allocRows}` : ''}
+
+    ${(pmt.linkedMREs||[]).length ? `
+      <div class="detail-section-label">Linked MREs</div>
+      <div class="detail-linked">
+        ${pmt.linkedMREs.map(mid => `<button class="detail-linked-chip">${mid}</button>`).join('')}
+      </div>` : ''}`;
+
+  openModal(`Payment ${id}`, body,
+    `<button class="btn btn-secondary" onclick="closeModal()">Close</button>
+     <button class="btn btn-danger btn-sm" onclick="deletePayment('${id}')">🗑 Delete</button>`,
+    true);
+}
+
+async function deletePayment(id) {
+  if (!confirm(`Delete ${id}? This cannot be undone.`)) return;
+  APP.records.payments = APP.records.payments.filter(p => p.id !== id);
+  closeModal();
+  render(APP.currentPage);
+  showOverlay('Deleting…');
+  _pendingDeletes.add(id);
+  setTimeout(() => _pendingDeletes.delete(id), 60000);
+  await deleteFromSheets('Payments', id);
+  hideOverlay();
+  saveLocal();
+  notify(`${id} deleted`);
+}
+
+// ══════════════════════════════════════════
+//  GOOGLE SHEETS SYNC
+// ══════════════════════════════════════════
+const SHEET_HEADERS = {
+  VendorBills: ['ID','Vendor','Bill Number','Bill Date','Due Date','Amount','Linked POs (JSON)','Linked MREs (JSON)','Status','Submitted By','Approved By','Approved At','Site','Remarks','Created At'],
+  Payments:    ['ID','Vendor','Payment Date','Payment Type','Amount','Mode','Reference','Allocations (JSON)','Linked MREs (JSON)','Site','Remarks','Created By','Created At'],
+};
+
+const SHEET_ROW = {
+  VendorBills: r => [r.id, r.vendor, r.billNumber||'', r.billDate||'', r.dueDate||'', r.amount||0, JSON.stringify(r.linkedPOs||[]), JSON.stringify(r.linkedMREs||[]), r.status, r.submittedBy||'', r.approvedBy||'', r.approvedAt||'', r.site||'', r.remarks||'', r.createdAt],
+  Payments:    r => [r.id, r.vendor, r.paymentDate, r.paymentType, r.amount||0, r.mode||'', r.reference||'', JSON.stringify(r.allocations||[]), JSON.stringify(r.linkedMREs||[]), r.site||'', r.remarks||'', r.createdBy||'', r.createdAt],
+};
+
+async function syncToSheets(sheetName, record) {
+  if (!APP.gsConnected || !APP.gsScriptUrl) return true;
+  const payload = {
+    sheet:   sheetName,
+    headers: SHEET_HEADERS[sheetName],
+    row:     SHEET_ROW[sheetName](record),
+  };
+  try {
+    const blob = new Blob([JSON.stringify(payload)], {type: 'text/plain'});
+    await fetch(APP.gsScriptUrl, { method: 'POST', mode: 'no-cors', body: blob });
+    return true;
+  } catch(e) {
+    console.warn('Sheets sync failed:', e);
+    return false;
+  }
+}
+
+const _pendingDeletes = new Set();
+
+async function deleteFromSheets(sheetName, id) {
+  if (!APP.gsConnected || !APP.gsScriptUrl) return;
+  const payload = { action: 'delete', sheet: sheetName, id };
+  try {
+    const blob = new Blob([JSON.stringify(payload)], {type: 'text/plain'});
+    await fetch(APP.gsScriptUrl, { method: 'POST', mode: 'no-cors', body: blob });
+  } catch(e) { console.warn('Sheets delete failed:', e); }
+}
+
+// ══════════════════════════════════════════
+//  PARSE SHEET ROWS
+// ══════════════════════════════════════════
+function parseSheetRow(sheetName, row) {
+  try {
+    switch(sheetName) {
+      case 'VendorBills': return {
+        id: row['ID'], vendor: row['Vendor'], billNumber: row['Bill Number'],
+        billDate: row['Bill Date'], dueDate: row['Due Date'],
+        amount: parseFloat(row['Amount'])||0,
+        linkedPOs:  JSON.parse(row['Linked POs (JSON)']  || '[]'),
+        linkedMREs: JSON.parse(row['Linked MREs (JSON)'] || '[]'),
+        status: row['Status']||'received',
+        submittedBy: row['Submitted By'], approvedBy: row['Approved By'],
+        approvedAt: row['Approved At'], site: row['Site']||'',
+        remarks: row['Remarks'], createdAt: row['Created At'],
+      };
+      case 'Payments': return {
+        id: row['ID'], vendor: row['Vendor'], paymentDate: row['Payment Date'],
+        paymentType: row['Payment Type'], amount: parseFloat(row['Amount'])||0,
+        mode: row['Mode'], reference: row['Reference'],
+        allocations: JSON.parse(row['Allocations (JSON)'] || '[]'),
+        linkedMREs:  JSON.parse(row['Linked MREs (JSON)'] || '[]'),
+        site: row['Site']||'', remarks: row['Remarks'],
+        createdBy: row['Created By'], createdAt: row['Created At'],
+      };
+      case 'PurchaseOrders': return {
+        id: row['ID'], date: row['Date'], vendor: row['Vendor'],
+        srRef: row['SR Reference'], orderedBy: row['Ordered By'],
+        deliveryDate: row['Delivery Date'],
+        amount: parseFloat(row['Amount'])||0,
+        items: JSON.parse(row['Items (JSON)'] || '[]'),
+        laborItems: JSON.parse(row['Labor Items (JSON)'] || '[]'),
+        remarks: row['Remarks'], status: row['Status'],
+        site: row['Site']||'', createdAt: row['Created At'],
+        forceComplete: !!row['Force Complete'],
+      };
+      case 'SiteReceipts': return {
+        id: row['ID'], date: row['Date'], receivedBy: row['Received By'],
+        poRef: row['PO Reference'], vendor: row['Vendor'],
+        vehicle: row['Vehicle No'], challan: row['Challan No'],
+        items: JSON.parse(row['Items (JSON)'] || '[]'),
+        laborItems: JSON.parse(row['Labor Items (JSON)'] || '[]'),
+        remarks: row['Remarks'], site: row['Site']||'', createdAt: row['Created At'],
+      };
+    }
+  } catch(e) { return null; }
+}
+
+function rebuildCounters() {
+  const extract = (arr, prefix) => arr.reduce((max, r) => {
+    const n = parseInt((r.id||'').replace(prefix+'-',''))||0;
+    return Math.max(max, n);
+  }, 0);
+  APP.counters.VB  = extract(APP.records.bills,    'VB');
+  APP.counters.PMT = extract(APP.records.payments, 'PMT');
+}
+
+async function loadFromSheets() {
+  if (!APP.gsConnected || !APP.gsScriptUrl) return;
+  try {
+    const res  = await fetch(`${APP.gsScriptUrl}?action=readAll`, { method: 'GET' });
+    const data = await res.json();
+
+    // Master data
+    if (data.MasterData && data.MasterData.length > 0) {
+      const mdRow = data.MasterData.find(r => r['Key'] === 'masterData');
+      if (mdRow && mdRow['Data (JSON)']) {
+        try {
+          const parsed = JSON.parse(mdRow['Data (JSON)']);
+          Object.keys(parsed).forEach(k => { APP.masterData[k] = parsed[k]; });
+          (APP.masterData.teamMembers||[]).forEach(m => { if (m.approver === undefined) m.approver = false; });
+          if (!APP.masterData.paymentModes) APP.masterData.paymentModes = [];
+        } catch(e) { console.warn('Could not parse master data:', e); }
+      }
+    }
+
+    // Bills and Payments (writable)
+    ['VendorBills','Payments'].forEach(sheetName => {
+      const key = sheetName === 'VendorBills' ? 'bills' : 'payments';
+      const rows = data[sheetName] || [];
+      const parsed = rows.map(r => parseSheetRow(sheetName, r))
+        .filter(r => r && r.id && !_pendingDeletes.has(r.id));
+      if (parsed.length > 0 || rows.length === 0) {
+        APP.records[key] = parsed;
+      }
+    });
+
+    // POs and MREs (read-only mirror)
+    ['PurchaseOrders','SiteReceipts'].forEach(sheetName => {
+      const key = sheetName === 'PurchaseOrders' ? 'pos' : 'mres';
+      const rows = data[sheetName] || [];
+      const parsed = rows.map(r => parseSheetRow(sheetName, r)).filter(Boolean);
+      if (parsed.length > 0) APP.records[key] = parsed;
+    });
+
+    rebuildCounters();
+    saveLocal();
+    updateGsStatus();
+    const total = APP.records.bills.length + APP.records.payments.length;
+    notify(total > 0 ? `Loaded ${total} AP records from Sheets` : 'Connected — no AP records yet');
+    render(APP.currentPage);
+  } catch(e) {
+    console.warn('Load from Sheets failed:', e?.message || e);
+    notify(`Could not reach server — data not refreshed`, true);
+  }
+}
+
+// ══════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════
+navigate('dashboard');
+updateUserPill();
+
+if (APP.gsConnected) {
+  showConnectingScreen();
+  loadFromSheets().then(() => {
+    showLoginScreen();
+  }).catch(() => {
+    loadLocal();
+    showLoginScreen();
+    notify('Could not reach Google Sheets — showing cached data', true);
+  });
+} else {
+  loadLocal();
+  showLoginScreen();
+}
+</script>
+</body>
+</html>
