@@ -4278,8 +4278,13 @@ function refreshPushOptInBanner() {
   const banner = document.getElementById('push-optin-banner');
   if (!banner || !window.OneSignalDeferred) return;
   window.OneSignalDeferred.push(async (OneSignal) => {
-    const optedIn = OneSignal.User.PushSubscription.optedIn;
-    banner.style.display = optedIn ? 'none' : 'block';
+    const sub = OneSignal.User.PushSubscription;
+    // Require an actual subscription id, not just the optedIn flag — that
+    // flag can be true from an earlier attempt that never actually
+    // completed registration, which would otherwise hide the banner with
+    // no real subscription behind it.
+    const reallySubscribed = sub.optedIn && !!sub.id;
+    banner.style.display = reallySubscribed ? 'none' : 'block';
   });
 }
 
@@ -4287,17 +4292,21 @@ function enablePushNotifications() {
   if (!window.OneSignalDeferred) return;
   window.OneSignalDeferred.push(async (OneSignal) => {
     await OneSignal.Notifications.requestPermission();
-    // requestPermission() only asks the browser for notification
-    // permission — it doesn't reliably complete OneSignal's own
-    // subscription registration on every browser. Explicitly opting in
-    // afterwards (when permission was actually granted) is the documented
-    // pattern for custom prompts and is what actually creates the
-    // subscription record OneSignal's dashboard shows under Audience.
-    if (Notification.permission === 'granted' && !OneSignal.User.PushSubscription.optedIn) {
-      await OneSignal.User.PushSubscription.optIn();
+    const sub = OneSignal.User.PushSubscription;
+    // optedIn can be a stale local flag from an earlier attempt that never
+    // actually completed registration (e.g. before the service worker was
+    // fixed) — if it's set but there's no real subscription id behind it,
+    // force a fresh opt-out/opt-in instead of trusting the flag.
+    if (Notification.permission === 'granted') {
+      if (sub.optedIn && !sub.id) {
+        await sub.optOut();
+      }
+      if (!sub.optedIn) {
+        await sub.optIn();
+      }
     }
     refreshPushOptInBanner();
-    if (OneSignal.User.PushSubscription.optedIn) {
+    if (OneSignal.User.PushSubscription.optedIn && OneSignal.User.PushSubscription.id) {
       notify('Push notifications enabled');
     } else if (Notification.permission === 'denied') {
       notify('Notifications blocked — enable them in your browser/site settings.', true);
