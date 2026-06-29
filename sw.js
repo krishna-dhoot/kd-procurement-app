@@ -7,7 +7,7 @@
 // Also pulls in the OneSignal worker (handles incoming push events) so push
 // notifications and offline caching share a single service worker rather
 // than fighting over the same scope.
-importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDKWorker.js');
+importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
 
 const CACHE_NAME = 'procurement-app-shell';
 const APP_SHELL = ['./', './index.html'];
