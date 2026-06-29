@@ -110,10 +110,15 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
 <script>
   window.OneSignalDeferred = window.OneSignalDeferred || [];
   OneSignalDeferred.push(async function(OneSignal) {
+    // Scope is computed from the current page's own directory rather than
+    // hardcoded to "/", so this works whether the site is hosted at a
+    // domain root (Netlify) or under a subpath (GitHub Pages project
+    // sites serve from /<repo-name>/, not the domain root).
+    const basePath = new URL('.', window.location.href).pathname;
     await OneSignal.init({
       appId: "db6beb30-8bc6-44fc-8dee-833e0ace7746",
       serviceWorkerPath: "sw.js",
-      serviceWorkerParam: { scope: "/" }
+      serviceWorkerParam: { scope: basePath }
     });
   });
 </script>
