@@ -3207,11 +3207,18 @@ async function shareDocument(docTitle, content) {
       // html2canvas defaults to rendering the full iframe viewport (the
       // fixed 600x900 above), not the content's actual size — without this
       // the canvas was mostly blank space, which then got squashed into the
-      // PDF page and looked stretched. Pin it to the real content bounds.
+      // PDF page and looked stretched. width/height crop it to the real
+      // content bounds. windowWidth/windowHeight, though, are deliberately
+      // left matching the iframe's own actual layout viewport (600x900) —
+      // setting those to the narrower measured content size instead caused
+      // anything that doesn't wrap cleanly (e.g. wide table headers) to
+      // reflow differently during capture than it did when laid out
+      // originally, overflowing past the crop boundary and getting cut off
+      // on the right.
       const canvas = await html2canvas(body, {
         scale, backgroundColor: '#ffffff',
         width: body.scrollWidth, height: body.scrollHeight,
-        windowWidth: body.scrollWidth, windowHeight: body.scrollHeight,
+        windowWidth: iframe.clientWidth, windowHeight: iframe.clientHeight,
       });
       // Derive the PDF page size from the canvas itself (dividing back out
       // the render scale) rather than measuring the source element
