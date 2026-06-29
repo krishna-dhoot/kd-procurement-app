@@ -525,6 +525,14 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
   favLink.href = svgFav;
   document.head.appendChild(favLink);
 })();
+
+// Offline support — lets the homescreen-installed app still open (showing
+// the last-loaded data) with no signal, instead of a blank error page.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
 </script>
 
 </head>
