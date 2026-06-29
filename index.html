@@ -293,13 +293,20 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
   }
   .field-group input:focus, .field-group select:focus, .field-group textarea:focus { border-color: var(--green); }
   .field-group textarea { resize: vertical; min-height: 80px; font-size: 15px; }
-  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field-row { display: grid; grid-template-columns: 1fr; gap: 12px; }
 
-  /* Items table inside form — scrollable */
-  .items-wrap { overflow-x: auto; margin: 0 -20px; padding: 0 20px; }
-  .items-table { width: 100%; border-collapse: collapse; min-width: 380px; }
-  .items-table th { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; padding: 6px 8px; text-align: left; white-space: nowrap; }
-  .items-table td { padding: 6px 6px; }
+  /* Items table inside form — on narrow screens each row becomes a stacked
+     card (description full-width on top, other fields wrapping below) since
+     a flat table forces every column, including the description box that
+     most needs room, into a sliver. Desktop restores the normal table grid. */
+  .items-wrap { margin: 0; padding: 0; }
+  .items-table { width: 100%; border-collapse: collapse; }
+  .items-table thead { display: none; }
+  .items-table, .items-table tbody { display: block; width: 100%; }
+  .items-table tr { display: flex; flex-wrap: wrap; gap: 8px; position: relative; padding: 12px 40px 12px 12px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+  .items-table td { display: block; padding: 0; flex: 1 1 110px; min-width: 0; }
+  .items-table td.item-desc-cell { flex: 1 1 100%; }
+  .items-table tr td:last-child { position: absolute; top: 8px; right: 8px; flex: none; }
   .items-table input, .items-table select { padding: 8px 8px; border: 1.5px solid var(--border); border-radius: 6px; font-size: 14px; font-family: 'DM Sans', sans-serif; width: 100%; background: var(--surface); color: var(--text); outline: none; min-height: 40px; }
   .items-table input[readonly] { background: var(--bg); color: var(--text-2); }
   .item-desc-cat { font-size: 11px; color: var(--text-3); padding: 2px 2px 0; min-height: 14px; }
@@ -388,6 +395,16 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
     .modal.modal-large { max-width: 700px; }
     .stats-row { grid-template-columns: repeat(4, 1fr); }
     .field-row { grid-template-columns: 1fr 1fr; }
+    .items-wrap { overflow-x: auto; margin: 0 -20px; padding: 0 20px; }
+    .items-table { min-width: 380px; }
+    .items-table thead { display: table-header-group; }
+    .items-table th { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; padding: 6px 8px; text-align: left; white-space: nowrap; }
+    .items-table, .items-table tbody { display: table; width: 100%; }
+    .items-table tbody { display: table-row-group; }
+    .items-table tr { display: table-row; flex-wrap: nowrap; gap: 0; position: static; padding: 0; margin-bottom: 0; border: none; border-radius: 0; background: transparent; }
+    .items-table td { display: table-cell; padding: 6px 6px; flex: none; }
+    .items-table td.item-desc-cell { flex: none; }
+    .items-table tr td:last-child { position: static; top: auto; right: auto; }
     .admin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
     .detail-fields { display: grid; grid-template-columns: 1fr 1fr; }
     .detail-field { border-right: 1px solid var(--border); }
