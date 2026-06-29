@@ -4279,8 +4279,23 @@ function enablePushNotifications() {
   if (!window.OneSignalDeferred) return;
   window.OneSignalDeferred.push(async (OneSignal) => {
     await OneSignal.Notifications.requestPermission();
+    // requestPermission() only asks the browser for notification
+    // permission — it doesn't reliably complete OneSignal's own
+    // subscription registration on every browser. Explicitly opting in
+    // afterwards (when permission was actually granted) is the documented
+    // pattern for custom prompts and is what actually creates the
+    // subscription record OneSignal's dashboard shows under Audience.
+    if (Notification.permission === 'granted' && !OneSignal.User.PushSubscription.optedIn) {
+      await OneSignal.User.PushSubscription.optIn();
+    }
     refreshPushOptInBanner();
-    if (OneSignal.User.PushSubscription.optedIn) notify('Push notifications enabled');
+    if (OneSignal.User.PushSubscription.optedIn) {
+      notify('Push notifications enabled');
+    } else if (Notification.permission === 'denied') {
+      notify('Notifications blocked — enable them in your browser/site settings.', true);
+    } else {
+      notify('Could not enable push notifications — try again.', true);
+    }
   });
 }
 function closeNotifPanel() {
