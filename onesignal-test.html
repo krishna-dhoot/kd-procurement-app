@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OneSignal Minimal Test</title>
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function (OneSignal) {
+    await OneSignal.init({
+      appId: "db6beb30-8bc6-44fc-8dee-833e0ace7746",
+    });
+    log('init() resolved');
+    refresh();
+  });
+
+  function log(msg) {
+    document.getElementById('log').textContent += msg + '\n';
+  }
+
+  function refresh() {
+    window.OneSignalDeferred.push(async (OneSignal) => {
+      const sub = OneSignal.User.PushSubscription;
+      document.getElementById('out').textContent = JSON.stringify({
+        browserPermission: Notification.permission,
+        optedIn: sub.optedIn,
+        subscriptionId: sub.id || '(none)',
+        subscriptionToken: sub.token ? sub.token.slice(0, 24) + '…' : '(none)',
+        onesignalId: OneSignal.User.onesignalId || '(none)',
+        swRegistered: !!(await navigator.serviceWorker.getRegistration()),
+      }, null, 2);
+    });
+  }
+
+  async function subscribe() {
+    window.OneSignalDeferred.push(async (OneSignal) => {
+      try {
+        await OneSignal.Notifications.requestPermission();
+        if (Notification.permission === 'granted' && !OneSignal.User.PushSubscription.optedIn) {
+          await OneSignal.User.PushSubscription.optIn();
+        }
+        log('subscribe attempt finished, no error thrown');
+      } catch (err) {
+        log('ERROR: ' + (err.message || err));
+      }
+      refresh();
+    });
+  }
+
+  window.addEventListener('error', (e) => log('window error: ' + e.message));
+</script>
+</head>
+<body style="font-family: sans-serif; padding: 20px; max-width: 500px; margin: 0 auto;">
+<h2>OneSignal Minimal Test</h2>
+<p>No custom service worker, no scope override — stock setup straight from OneSignal's docs.</p>
+<button onclick="subscribe()" style="padding: 12px 20px; font-size: 16px;">Subscribe</button>
+<button onclick="refresh()" style="padding: 12px 20px; font-size: 16px;">Refresh status</button>
+<h3>Status</h3>
+<pre id="out" style="background: #f0f0f0; padding: 12px; border-radius: 6px; white-space: pre-wrap;">(not checked yet)</pre>
+<h3>Log</h3>
+<pre id="log" style="background: #f0f0f0; padding: 12px; border-radius: 6px; white-space: pre-wrap;"></pre>
+</body>
+</html>
