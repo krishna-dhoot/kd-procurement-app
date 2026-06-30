@@ -601,7 +601,6 @@ if ('serviceWorker' in navigator) {
     Get notified instantly for new requisitions, orders and deliveries — even when the app is closed.
     <button class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px;" onclick="enablePushNotifications()">🔔 Enable Push Notifications</button>
   </div>
-  <button class="notif-mark-all-btn" onclick="debugPushState()" style="border-top:none;">🔍 Debug push subscription</button>
   <button class="notif-mark-all-btn" onclick="markAllNotifsRead()">Mark all as read</button>
   <div class="notif-list" id="notif-list">
     <div class="notif-empty">🔔<br>No notifications yet</div>
@@ -4316,41 +4315,6 @@ function enablePushNotifications() {
     } catch (err) {
       notify('Push enable failed: ' + (err.message || err), true);
     }
-  });
-}
-
-// Temporary diagnostic — shows the actual OneSignal subscription state
-// on-screen (no devtools needed) to find out whether a real subscription
-// (with an id/token) was created, vs. the local "optedIn" flag being true
-// without one actually existing server-side.
-function debugPushState() {
-  if (!window.OneSignalDeferred) { alert('OneSignal not loaded'); return; }
-  window.OneSignalDeferred.push(async (OneSignal) => {
-    const sub = OneSignal.User.PushSubscription;
-    let liveRegAttemptError = '(not attempted — already registered)';
-    const existingReg = await navigator.serviceWorker.getRegistration();
-    if (!existingReg) {
-      // Try registering right now, here, so we get a fresh, fully-awaited
-      // error rather than relying on whatever happened (or didn't) at
-      // page-load time.
-      try {
-        await navigator.serviceWorker.register('./sw.js');
-        liveRegAttemptError = '(succeeded just now)';
-      } catch (err) {
-        liveRegAttemptError = err.message || String(err);
-      }
-    }
-    const info = {
-      browserPermission: Notification.permission,
-      optedIn: sub.optedIn,
-      subscriptionId: sub.id || '(none)',
-      subscriptionToken: sub.token ? sub.token.slice(0, 24) + '…' : '(none)',
-      onesignalId: OneSignal.User.onesignalId || '(none)',
-      swRegisteredAtPageLoad: !!existingReg,
-      pageLoadRegError: window.__swRegError || '(none recorded)',
-      liveRegAttemptError,
-    };
-    alert(JSON.stringify(info, null, 2));
   });
 }
 
