@@ -1268,6 +1268,7 @@ function renderMREs() {
                 <div class="record-card-title">${r.vendor}</div>
                 <div class="record-card-sub">PO: ${r.poRef||'—'} · ${r.receivedBy||''}</div>
               </div>
+              ${r.geoFlag ? `<span class="badge badge-pending" title="${r.geoReason||''}">⚠ Off-site</span>` : ''}
             </div>
             <div class="record-card-bottom">
               <span style="font-size:12px;color:var(--text-3);">${firstItemLabel(r)} · ${fmtDate(r.date)}</span>
@@ -1456,7 +1457,8 @@ function renderAdmin() {
       <div class="admin-item-list">
         ${(md[l.key]||[]).map(item=>`
           <div class="admin-item">
-            <div class="admin-item-name">${item.name}</div>
+            <div class="admin-item-name">${item.name}${l.key==='sites' ? `<div style="font-size:11px;color:${item.lat?'var(--green-dark)':'var(--amber)'};margin-top:2px;">📍 ${item.lat ? `Set (±geofence ${SITE_GEOFENCE_RADIUS_M}m)` : 'Not set — geofence check disabled for this site'}</div>` : ''}</div>
+            ${l.key==='sites' ? `<button class="btn btn-secondary btn-sm" onclick="setSiteLocation('${item.id}')">📍 ${item.lat?'Update':'Set'} Location</button>` : ''}
             <button class="btn btn-danger btn-sm btn-icon" onclick="removeAdminItem('${l.key}','${item.id}')">✕</button>
           </div>`).join('') || '<div style="padding:10px;font-size:12px;color:var(--text-3);">No items yet</div>'}
       </div>
@@ -2281,6 +2283,48 @@ async function ocrVehiclePlate(base64Image) {
   return { plate: extractPlateNumber(rawText), rawText };
 }
 
+// Compares the device's current GPS position against the current site's
+// reference coordinates (set once by an admin — see setSiteLocation()).
+// Never blocks the capture: if outside the radius, prompts for a short
+// reason and stashes it (along with the distance) in hidden fields that
+// saveMRE() picks up, so it ends up as a visible flag on the record for
+// review rather than stopping anyone from doing their job over a GPS blip.
+async function runGeofenceCheck() {
+  const flagEl = document.getElementById('f-geo-flag');
+  const distEl = document.getElementById('f-geo-distance');
+  const reasonEl = document.getElementById('f-geo-reason');
+  const statusEl = document.getElementById('geo-status');
+  if (!flagEl) return;
+  flagEl.value = ''; distEl.value = ''; reasonEl.value = '';
+  if (statusEl) { statusEl.style.display = 'none'; statusEl.textContent = ''; }
+
+  const site = (APP.masterData.sites || []).find(s => s.name === APP.currentSite);
+  if (!site || !site.lat) return; // no reference point set for this site — nothing to check against
+
+  if (!navigator.geolocation) return;
+  let pos;
+  try {
+    pos = await new Promise((resolve, reject) =>
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000 })
+    );
+  } catch (err) {
+    return; // couldn't get a location this time — don't block on it, just skip the check
+  }
+
+  const distance = Math.round(geoDistanceMeters(site.lat, site.lng, pos.coords.latitude, pos.coords.longitude));
+  if (distance <= SITE_GEOFENCE_RADIUS_M) return;
+
+  const reason = prompt(`This photo was taken ${distance}m from "${site.name}" (outside the ${SITE_GEOFENCE_RADIUS_M}m site radius). Why?`) || '(no reason given)';
+  flagEl.value = '1';
+  distEl.value = String(distance);
+  reasonEl.value = reason;
+  if (statusEl) {
+    statusEl.style.display = '';
+    statusEl.style.color = 'var(--amber)';
+    statusEl.textContent = `⚠ Captured ${distance}m from site — ${reason}`;
+  }
+}
+
 async function handleDeliveryPhoto(input) {
   const file = input.files && input.files[0];
   input.value = ''; // allow re-selecting the same shot again if needed
@@ -2289,6 +2333,8 @@ async function handleDeliveryPhoto(input) {
   // Date reflects the moment of capture, not whenever the form happens to
   // be saved.
   document.getElementById('f-date').value = today();
+
+  await runGeofenceCheck();
 
   if (formItemType() !== 'material') {
     notify('Date set from photo — verify it looks right.');
@@ -2886,7 +2932,11 @@ function openMREModal(arg) {
     <div style="margin-bottom:12px;">
       <input type="file" id="mre-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="handleDeliveryPhoto(this)">
       <button type="button" class="btn btn-secondary btn-sm" id="mre-photo-btn" onclick="document.getElementById('mre-photo-input').click()">${initType==='material'?'📷 Scan Delivery Vehicle':'📷 Photo of Completed Work'}</button>
-      <div style="font-size:11px;color:var(--text-3);margin-top:4px;">Opens your camera — fills in Date${initType==='material'?' and Vehicle No.':''} automatically. Not stored, used only to read these fields.</div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px;">Opens your camera — fills in Date${initType==='material'?' and Vehicle No.':''} automatically, and checks you're at the site. Photo itself isn't stored.</div>
+      <input type="hidden" id="f-geo-flag" value="${mre?.geoFlag?'1':''}">
+      <input type="hidden" id="f-geo-distance" value="${mre?.geoDistanceM||''}">
+      <input type="hidden" id="f-geo-reason" value="${mre?.geoReason||''}">
+      <div id="geo-status" style="font-size:11px;margin-top:4px;${mre?.geoFlag?'color:var(--amber);':'display:none;'}">${mre?.geoFlag?`⚠ Captured ${mre.geoDistanceM}m from site — ${mre.geoReason||'no reason given'}`:''}</div>
     </div>
     <div class="section-divider">Items Received / Labor Deployed</div>
     <div style="display:flex;gap:24px;align-items:center;padding:4px 0 10px;">
@@ -3018,6 +3068,9 @@ async function saveMRE(id) {
   const vehicle = document.getElementById('f-vehicle').value;
   const challan = document.getElementById('f-challan').value;
   const remarks = document.getElementById('f-remarks').value;
+  const geoFlag = document.getElementById('f-geo-flag')?.value === '1';
+  const geoDistanceM = geoFlag ? Number(document.getElementById('f-geo-distance').value) : '';
+  const geoReason = geoFlag ? document.getElementById('f-geo-reason').value : '';
   if (!poRef) { notify('Select the Purchase Order this receipt is against.', true); return; }
   if (!vendor || !receivedBy) { notify('Vendor and Received By are required.', true); return; }
   const type = formItemType();
@@ -3040,7 +3093,7 @@ async function saveMRE(id) {
   if (id) {
     // Edit: update MRE in-place first, then recompute PO status from all linked MREs
     const mre = APP.records.mres.find(x => x.id === id);
-    Object.assign(mre, { date, receivedBy, poRef, vendor, vehicle, challan, items, laborItems, remarks });
+    Object.assign(mre, { date, receivedBy, poRef, vendor, vehicle, challan, items, laborItems, remarks, geoFlag, geoDistanceM, geoReason });
     const ok = await syncToSheets('SiteReceipts', mre);
     if (!ok) { setModalSaving(false); notify('Save failed — check connection.', true); return; }
     if (poRef) {
@@ -3050,7 +3103,7 @@ async function saveMRE(id) {
     closeModal(); notify(`MRE ${mre.id} updated`);
   } else {
     // Create: push new MRE first so computePOStatus includes it in the aggregate
-    const rec = { id:nextId('MRE'), date, receivedBy, poRef, vendor, vehicle, challan, items, laborItems, remarks, site:APP.currentSite, createdAt:new Date().toISOString() };
+    const rec = { id:nextId('MRE'), date, receivedBy, poRef, vendor, vehicle, challan, items, laborItems, remarks, geoFlag, geoDistanceM, geoReason, site:APP.currentSite, createdAt:new Date().toISOString() };
     APP.records.mres.push(rec);
     const ok = await syncToSheets('SiteReceipts', rec);
     if (!ok) { APP.records.mres.pop(); setModalSaving(false); notify('Save failed — check connection.', true); return; }
@@ -3158,7 +3211,7 @@ function viewMRE(id) {
   const r = APP.records.mres.find(x=>x.id===id);
   if (!r) return;
   const body = `
-    <div class="detail-header"><span class="detail-id-badge">${r.id}</span></div>
+    <div class="detail-header"><span class="detail-id-badge">${r.id}</span>${r.geoFlag ? `<span class="badge badge-pending">⚠ Off-site capture</span>` : ''}</div>
     <div class="detail-fields">
       ${detailField('Date', fmtDate(r.date))}
       ${detailField('Vendor', defVal(r.vendor))}
@@ -3166,6 +3219,7 @@ function viewMRE(id) {
       ${detailField('Received By', defVal(r.receivedBy))}
       ${detailField('Vehicle', defVal(r.vehicle))}
       ${detailField('Challan', defVal(r.challan))}
+      ${r.geoFlag ? detailField('⚠ Capture Location', `${r.geoDistanceM}m from site — ${r.geoReason||'no reason given'}`) : ''}
       ${r.remarks ? detailField('Remarks', r.remarks) : ''}
     </div>
     <div class="detail-section-label">Materials Received</div>
@@ -4083,6 +4137,41 @@ function removeAdminItem(key, id) {
   render('admin');
 }
 
+// ── Site geofencing ──
+// Distance in meters between two lat/lng points (Haversine formula).
+function geoDistanceMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat/2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+const SITE_GEOFENCE_RADIUS_M = 500;
+
+// Captures the admin's current GPS position as the site's reference point
+// for the geofence check — call this once while physically standing at
+// the site.
+function setSiteLocation(id) {
+  if (!navigator.geolocation) { notify('Geolocation not supported on this device/browser.', true); return; }
+  notify('Getting current location…');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const site = APP.masterData.sites.find(s => s.id === id);
+      if (!site) return;
+      site.lat = pos.coords.latitude;
+      site.lng = pos.coords.longitude;
+      saveLocal();
+      syncMasterData();
+      notify(`Location saved for ${site.name} (accuracy ±${Math.round(pos.coords.accuracy)}m)`);
+      render('admin');
+    },
+    (err) => notify('Could not get location: ' + err.message, true),
+    { enableHighAccuracy: true, timeout: 15000 }
+  );
+}
+
 // ══════════════════════════════════════════
 //  GOOGLE SHEETS SYNC  (Apps Script Web App)
 // ══════════════════════════════════════════
@@ -4091,7 +4180,7 @@ function removeAdminItem(key, id) {
 const SHEET_HEADERS = {
   Requisitions:     ['ID','Date','Urgency','Requested By','Site','Items (JSON)','Labor Items (JSON)','Remarks','Status','Created At'],
   PurchaseOrders:   ['ID','Date','Vendor','SR Reference','Ordered By','Delivery Date','Amount','Items (JSON)','Labor Items (JSON)','Remarks','Status','Site','Created At','Force Complete'],
-  SiteReceipts: ['ID','Date','Received By','PO Reference','Vendor','Vehicle No','Challan No','Items (JSON)','Labor Items (JSON)','Remarks','Site','Created At'],
+  SiteReceipts: ['ID','Date','Received By','PO Reference','Vendor','Vehicle No','Challan No','Items (JSON)','Labor Items (JSON)','Remarks','Site','Created At','Geo Flag','Geo Distance (m)','Geo Reason'],
   Works:            ['ID','Name','Site','Estimated Materials (JSON)','Estimated Labor (JSON)','Remarks','Created At'],
 };
 
@@ -4099,7 +4188,7 @@ const SHEET_HEADERS = {
 const SHEET_ROW = {
   Requisitions:     r => [r.id, r.date, r.urgency||'', r.requestedBy, r.site, JSON.stringify(r.items||[]), JSON.stringify(r.laborItems||[]), r.remarks||'', r.status, r.createdAt],
   PurchaseOrders:   r => [r.id, r.date, r.vendor, r.srRef||'', r.orderedBy||'', r.deliveryDate||'', r.amount, JSON.stringify(r.items||[]), JSON.stringify(r.laborItems||[]), r.remarks||'', r.status, r.site||'', r.createdAt, r.forceComplete ? '1' : ''],
-  SiteReceipts: r => [r.id, r.date, r.receivedBy, r.poRef||'', r.vendor, r.vehicle||'', r.challan||'', JSON.stringify(r.items||[]), JSON.stringify(r.laborItems||[]), r.remarks||'', r.site||'', r.createdAt],
+  SiteReceipts: r => [r.id, r.date, r.receivedBy, r.poRef||'', r.vendor, r.vehicle||'', r.challan||'', JSON.stringify(r.items||[]), JSON.stringify(r.laborItems||[]), r.remarks||'', r.site||'', r.createdAt, r.geoFlag ? '1' : '', r.geoDistanceM||'', r.geoReason||''],
   Works:            r => [r.id, r.name, r.site||'', JSON.stringify(r.estimatedMaterials||[]), JSON.stringify(r.estimatedLabor||[]), r.remarks||'', r.createdAt],
 };
 
@@ -4237,7 +4326,8 @@ function parseSheetRow(sheetName, row) {
         vehicle: row['Vehicle No'], challan: row['Challan No'],
         items: JSON.parse(row['Items (JSON)'] || '[]'),
         laborItems: JSON.parse(row['Labor Items (JSON)'] || '[]'),
-        remarks: row['Remarks'], site: row['Site']||'', createdAt: row['Created At']
+        remarks: row['Remarks'], site: row['Site']||'', createdAt: row['Created At'],
+        geoFlag: !!row['Geo Flag'], geoDistanceM: row['Geo Distance (m)']||'', geoReason: row['Geo Reason']||''
       };
       case 'Works': return {
         id: row['ID'], name: row['Name'], site: row['Site']||'',
