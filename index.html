@@ -5039,25 +5039,14 @@ async function loadFromSheets(silent = false) {
     const newSites = (data.Sites       || []).map(r => { const o = { id: r['ID'], name: r['Name'] }; if (r['Lat']) o.lat = parseFloat(r['Lat']); if (r['Lng']) o.lng = parseFloat(r['Lng']); return o; }).filter(r => r.id && r.name);
     const newVendors = (data.Vendors   || []).map(r => { let cats = []; try { cats = JSON.parse(r['Categories']||'[]'); } catch(e){} return { id: r['ID'], name: r['Name'], categories: cats }; }).filter(r => r.id && r.name);
 
+    if (newCats.length)    APP.masterData.categories  = newCats;
+    if (newMats.length)    APP.masterData.materials   = newMats;
+    if (newLabor.length)   APP.masterData.laborTypes  = newLabor;
+    if (newTeam.length)    APP.masterData.teamMembers = newTeam;
+    if (newSites.length)   APP.masterData.sites       = newSites;
+    if (newVendors.length) APP.masterData.vendors     = newVendors;
     if (newCats.length || newMats.length || newLabor.length || newTeam.length) {
-      // New structured sheets — use them
-      if (newCats.length)    APP.masterData.categories  = newCats;
-      if (newMats.length)    APP.masterData.materials   = newMats;
-      if (newLabor.length)   APP.masterData.laborTypes  = newLabor;
-      if (newTeam.length)    APP.masterData.teamMembers = newTeam;
-      if (newSites.length)   APP.masterData.sites       = newSites;
-      if (newVendors.length) APP.masterData.vendors     = newVendors;
       _migrateMasterData();
-    } else if (data.MasterData && data.MasterData.length > 0) {
-      // Legacy fallback — single JSON blob
-      const mdRow = data.MasterData.find(r => r['Key'] === 'masterData');
-      if (mdRow && mdRow['Data (JSON)']) {
-        try {
-          const parsed = JSON.parse(mdRow['Data (JSON)']);
-          Object.keys(parsed).forEach(k => { APP.masterData[k] = parsed[k]; });
-          _migrateMasterData();
-        } catch(e) { console.warn('Could not parse master data from sheet:', e); }
-      }
     }
     (APP.masterData.teamMembers||[]).forEach(m => { if (m.approver === undefined) m.approver = false; });
     if (!APP.masterData.works)      APP.masterData.works = [];
