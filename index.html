@@ -154,10 +154,10 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
   .drawer-logo-sub { font-size: 11px; color: rgba(255,255,255,0.6); }
   .drawer-section { padding: 10px 10px 4px; }
   .drawer-label { font-size: 10px; letter-spacing: 0.08em; opacity: 0.5; padding: 0 10px; margin-bottom: 4px; text-transform: uppercase; color: #fff; }
-  .drawer-item { display: flex; align-items: center; gap: 12px; padding: 12px 12px; border-radius: 9px; cursor: pointer; font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.82); transition: background 0.12s; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; min-height: 48px; }
+  .drawer-item { display: flex; align-items: center; gap: 14px; padding: 15px 14px; border-radius: 9px; cursor: pointer; font-size: 17px; font-weight: 500; color: rgba(255,255,255,0.82); transition: background 0.12s; margin-bottom: 4px; border: none; background: none; width: 100%; text-align: left; min-height: 56px; }
   .drawer-item:active { background: rgba(255,255,255,0.12); }
   .drawer-item.active { background: rgba(255,255,255,0.18); color: #fff; }
-  .drawer-item-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+  .drawer-item-icon { font-size: 22px; width: 28px; text-align: center; flex-shrink: 0; }
   .drawer-badge { font-size: 10px; background: rgba(255,255,255,0.18); border-radius: 4px; padding: 2px 6px; margin-left: auto; font-family: 'DM Mono', monospace; color: rgba(255,255,255,0.7); }
   .drawer-lock-icon { margin-left: auto; opacity: 0.5; font-size: 12px; }
   /* Category chips in admin */
@@ -624,18 +624,12 @@ if ('serviceWorker' in navigator) {
     </div>
   </div>
   <div class="drawer-section">
-    <div class="drawer-label">Procurement Flow</div>
     <button class="drawer-item" onclick="navTo('dashboard')"><span class="drawer-item-icon">📊</span> Dashboard</button>
-    <button class="drawer-item" onclick="navTo('requisition')"><span class="drawer-item-icon">📋</span> Requisitions <span class="drawer-badge">1</span></button>
-    <button class="drawer-item" onclick="navTo('po')"><span class="drawer-item-icon">📄</span> Purchase Orders <span class="drawer-badge">2</span></button>
-    <button class="drawer-item" onclick="navTo('mre')"><span class="drawer-item-icon">🚛</span> Site Receipts <span class="drawer-badge">3</span></button>
     <button class="drawer-item" onclick="navTo('works')"><span class="drawer-item-icon">🏗️</span> Works</button>
     <button class="drawer-item" onclick="navTo('reports')"><span class="drawer-item-icon">📈</span> Reports</button>
   </div>
   <div class="drawer-section" style="margin-top:auto;padding-bottom:20px;">
-    <div class="drawer-label">Settings</div>
     <button class="drawer-item" onclick="navTo('admin')"><span class="drawer-item-icon">⚙️</span> Admin Panel <span class="drawer-lock-icon">🔒</span></button>
-    <button class="drawer-item" onclick="navTo('gssetup')"><span class="drawer-item-icon">📊</span> Google Sheets <span class="drawer-lock-icon">🔒</span></button>
   </div>
 </nav>
 
@@ -1573,6 +1567,7 @@ function renderAdmin() {
       <div class="page-header">
         <div class="page-header-left"><h2>Admin Panel</h2><p>Manage dropdown lists used throughout the procurement flow</p></div>
         <div style="display:flex;gap:8px;">
+          <button class="btn btn-secondary" onclick="navigate('gssetup')">📊 GS Setup</button>
           <button class="btn btn-secondary" onclick="changePin()">🔑 Change PIN</button>
           <button class="btn btn-danger" onclick="lockAdmin()">🔒 Lock</button>
         </div>
