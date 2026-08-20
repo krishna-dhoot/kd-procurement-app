@@ -4284,6 +4284,24 @@ function _migrateMasterData() {
       v.categories = v.category ? [v.category] : [];
     }
   });
+
+  // Seed default categories on a fresh install (no GS data yet)
+  if (!(APP.masterData.categories||[]).length) {
+    const DEFAULT_CATEGORIES = [
+      'Concrete & Cement', 'Steel & Reinforcement', 'Bricks & Blocks',
+      'Sand & Aggregates', 'Waterproofing', 'Formwork & Shuttering',
+      'Plumbing', 'Electrical', 'Flooring', 'Doors & Windows',
+      'Finishing & Painting', 'Roofing', 'Insulation', 'Safety & PPE',
+      'Tools & Equipment', 'Scaffolding', 'Adhesives & Sealants', 'Tiles & Cladding',
+      // Labor categories
+      'Civil & Structural', 'Masonry', 'Carpentry & Formwork',
+      'Safety & Supervision'
+    ];
+    APP.masterData.categories = DEFAULT_CATEGORIES.map((name, i) => ({
+      id: 'cat' + (i + 1),
+      name
+    }));
+  }
 }
 
 function addVendor() {
