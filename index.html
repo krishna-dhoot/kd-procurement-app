@@ -103,25 +103,6 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0F6E56">
 <title>Site Procurement Manager</title>
-<!-- OneSignal Web Push — shares our own sw.js (see serviceWorkerPath below)
-     instead of registering a separate OneSignalSDKWorker.js, so push and
-     offline-caching live in one service worker. -->
-<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-<script>
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  OneSignalDeferred.push(async function(OneSignal) {
-    // Scope is computed from the current page's own directory rather than
-    // hardcoded to "/", so this works whether the site is hosted at a
-    // domain root (Netlify) or under a subpath (GitHub Pages project
-    // sites serve from /<repo-name>/, not the domain root).
-    const basePath = new URL('.', window.location.href).pathname;
-    await OneSignal.init({
-      appId: "db6beb30-8bc6-44fc-8dee-833e0ace7746",
-      serviceWorkerPath: "sw.js",
-      serviceWorkerParam: { scope: basePath }
-    });
-  });
-</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -158,28 +139,6 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
   .topbar-icon-btn { width: 36px; height: 36px; border: none; background: none; color: rgba(255,255,255,0.85); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
   .topbar-icon-btn:active { background: rgba(255,255,255,0.15); }
   /* Bell badge */
-  .notif-bell-wrap { position: relative; display: flex; }
-  .notif-badge { position: absolute; top: 4px; right: 3px; background: #E53935; color: #fff; font-size: 8px; font-weight: 700; min-width: 15px; height: 15px; border-radius: 8px; display: none; align-items: center; justify-content: center; padding: 0 3px; pointer-events: none; line-height: 1; border: 1.5px solid #0F6E56; }
-  /* Notification panel */
-  .notif-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 150; opacity: 0; pointer-events: none; transition: opacity 0.22s; }
-  .notif-overlay.open { opacity: 1; pointer-events: all; }
-  .notif-panel { position: fixed; top: 0; right: -340px; width: 320px; height: 100%; background: #fff; z-index: 160; transition: right 0.24s cubic-bezier(.4,0,.2,1); display: flex; flex-direction: column; box-shadow: -4px 0 24px rgba(0,0,0,0.18); }
-  .notif-panel.open { right: 0; }
-  @media (max-width: 360px) { .notif-panel { width: 100%; right: -100%; } }
-  .notif-panel-hdr { padding: 14px 14px 12px; border-bottom: 1px solid rgba(255,255,255,0.15); display: flex; align-items: center; gap: 10px; background: #0F6E56; color: #fff; flex-shrink: 0; padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
-  .notif-panel-title { font-size: 15px; font-weight: 600; flex: 1; }
-  .notif-panel-close { width: 32px; height: 32px; border: none; background: rgba(255,255,255,0.15); color: #fff; border-radius: 7px; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .notif-mark-all-btn { font-size: 11px; color: #0F6E56; background: none; border: none; cursor: pointer; font-weight: 600; padding: 6px 12px; display: block; text-align: right; width: 100%; border-bottom: 1px solid #F0EEE8; }
-  .notif-list { flex: 1; overflow-y: auto; }
-  .notif-empty { padding: 48px 20px; text-align: center; color: #aaa; font-size: 13px; line-height: 1.8; }
-  .notif-item { padding: 11px 14px; border-bottom: 1px solid #F5F3EE; display: flex; gap: 10px; align-items: flex-start; }
-  .notif-item.unread { background: #F5FAF7; }
-  .notif-item-icon { font-size: 17px; flex-shrink: 0; margin-top: 1px; }
-  .notif-item-body { flex: 1; min-width: 0; }
-  .notif-item-msg { font-size: 12px; color: #1a1a18; line-height: 1.5; }
-  .notif-item-msg strong { font-weight: 700; }
-  .notif-item-time { font-size: 10px; color: #aaa; margin-top: 3px; }
-  .notif-unread-dot { width: 7px; height: 7px; background: #0F6E56; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
   .gs-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green-mid); display: inline-block; }
   .gs-dot.disconnected { background: #FAC775; }
 
@@ -680,23 +639,6 @@ if ('serviceWorker' in navigator) {
   </div>
 </nav>
 
-<!-- Notification panel -->
-<div class="notif-overlay" id="notif-overlay" onclick="closeNotifPanel()"></div>
-<div class="notif-panel" id="notif-panel">
-  <div class="notif-panel-hdr">
-    <span style="font-size:18px;">🔔</span>
-    <span class="notif-panel-title">Notifications</span>
-    <button class="notif-panel-close" onclick="closeNotifPanel()">✕</button>
-  </div>
-  <div id="push-optin-banner" style="display:none;margin:10px 14px 0;padding:10px 12px;background:var(--gray-light);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;color:var(--text-2);">
-    Get notified instantly for new requisitions, orders and deliveries — even when the app is closed.
-    <button class="btn btn-primary btn-sm" style="width:100%;justify-content:center;margin-top:8px;" onclick="enablePushNotifications()">🔔 Enable Push Notifications</button>
-  </div>
-  <button class="notif-mark-all-btn" onclick="markAllNotifsRead()">Mark all as read</button>
-  <div class="notif-list" id="notif-list">
-    <div class="notif-empty">🔔<br>No notifications yet</div>
-  </div>
-</div>
 
 <!-- Top bar -->
 <header class="topbar">
@@ -709,8 +651,6 @@ if ('serviceWorker' in navigator) {
     </div>
   </div>
   <div class="topbar-actions" style="display:none;">
-    <!-- kept (hidden) so legacy null-checked JS (updateGsStatus, updateNotifBadge) has somewhere to look without erroring -->
-    <span class="notif-badge" id="notif-badge"></span>
     <span id="user-pill-name"></span>
     <span class="gs-dot disconnected" id="gs-dot"></span>
   </div>
@@ -879,7 +819,6 @@ const APP = {
   },
 
   counters: { SR: 0, PO: 0, MRE: 0, WK: 0 },
-  notifications: [],   // loaded from Notifications sheet
 
   dashView: null, // active tile key: 'pendingApproval'|'pendingOrder'|'activePOs'|'pendingDelivery'
 
@@ -1559,17 +1498,12 @@ function renderAdmin() {
   const materialsCard = `
     <div class="admin-list-card" id="admin-card-materials">
       <div class="admin-list-header"><h3>Materials / Items</h3><span>${(md.materials||[]).length} entries</span></div>
-      <div style="padding:8px 10px 4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-        <button class="btn btn-secondary btn-sm" onclick="aiGenerateImages('materials')">🤖 AI Generate Thumbnails</button>
-        <span id="ai-img-progress-materials" style="font-size:11px;color:var(--text-3);"></span>
-      </div>
       <div style="padding:0 8px 6px;">
         <input class="admin-search-input" placeholder="🔍 Search materials…" oninput="filterAdminList('admin-card-materials',this.value)">
       </div>
       <div class="admin-item-list">
         ${(md.materials||[]).map(m=>`
           <div class="admin-item">
-            ${m.imageUrl ? `<img src="${m.imageUrl}" alt="" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0;">` : '<div style="width:32px;height:32px;border-radius:6px;background:var(--bg);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-3);">📦</div>'}
             <div style="flex:1;min-width:0;">
               <div class="admin-item-name">${m.name}</div>
               <div class="admin-item-sub">${[m.unit, m.category].filter(Boolean).join(' · ')}</div>
@@ -1590,17 +1524,12 @@ function renderAdmin() {
   const laborCard = `
     <div class="admin-list-card" id="admin-card-laborTypes">
       <div class="admin-list-header"><h3>Labor Trades</h3><span>${(md.laborTypes||[]).length} entries</span></div>
-      <div style="padding:8px 10px 4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-        <button class="btn btn-secondary btn-sm" onclick="aiGenerateImages('laborTypes')">🤖 AI Generate Thumbnails</button>
-        <span id="ai-img-progress-laborTypes" style="font-size:11px;color:var(--text-3);"></span>
-      </div>
       <div style="padding:0 8px 6px;">
         <input class="admin-search-input" placeholder="🔍 Search trades…" oninput="filterAdminList('admin-card-laborTypes',this.value)">
       </div>
       <div class="admin-item-list">
         ${(md.laborTypes||[]).map(l=>`
           <div class="admin-item">
-            ${l.imageUrl ? `<img src="${l.imageUrl}" alt="" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0;">` : '<div style="width:32px;height:32px;border-radius:6px;background:var(--bg);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-3);">👷</div>'}
             <div style="flex:1;min-width:0;">
               <div class="admin-item-name">${l.name}</div>
               <div class="admin-item-sub">${[l.unit, l.category].filter(Boolean).join(' · ')}</div>
@@ -1973,58 +1902,12 @@ function renderGsSetup() {
             <div>3. Click <strong>Deploy → New deployment → Web app</strong></div>
             <div>4. Set <em>Execute as</em>: <strong>Me</strong> &nbsp;|&nbsp; <em>Who has access</em>: <strong>Anyone</strong></div>
             <div>5. Copy the <strong>Web App URL</strong> and paste it here</div>
-            <div>6. In the script, paste your OneSignal <strong>REST API Key</strong> (OneSignal dashboard → Settings → Keys &amp; IDs) into <code style="background:rgba(0,0,0,0.06);padding:1px 5px;border-radius:3px;">ONESIGNAL_REST_API_KEY</code></div>
           </div>
         </div>
 
         <details style="margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;">
           <summary style="padding:10px 14px;font-size:12px;font-weight:600;cursor:pointer;background:var(--gray-light);color:var(--text-2);list-style:none;">▶ Show Apps Script code to copy</summary>
-          <pre style="margin:0;padding:14px;font-size:11px;font-family:'DM Mono',monospace;background:var(--surface);overflow-x:auto;color:var(--text);line-height:1.6;">// ── OneSignal config (fill this in) ───────────────────────────
-var ONESIGNAL_APP_ID       = 'db6beb30-8bc6-44fc-8dee-833e0ace7746';
-var ONESIGNAL_REST_API_KEY = 'YOUR_ONESIGNAL_REST_API_KEY_HERE'; // OneSignal dashboard → Settings → Keys &amp; IDs
-
-// ── Notification helpers ──────────────────────────────────────
-function sendOneSignal_(title, msg) {
-  if (!ONESIGNAL_REST_API_KEY || ONESIGNAL_REST_API_KEY === 'YOUR_ONESIGNAL_REST_API_KEY_HERE') return;
-  try {
-    UrlFetchApp.fetch(
-      'https://onesignal.com/api/v1/notifications',
-      { method: 'post', contentType: 'application/json',
-        headers: { Authorization: 'Basic ' + ONESIGNAL_REST_API_KEY },
-        payload: JSON.stringify({
-          app_id: ONESIGNAL_APP_ID,
-          included_segments: ['Subscribed Users'],
-          headings: { en: title },
-          contents: { en: msg }
-        }),
-        muteHttpExceptions: true }
-    );
-  } catch(e) { Logger.log('OneSignal error: ' + e); }
-}
-
-function pushNotification_(type, msg, details) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = ss.getSheetByName('Notifications');
-  if (!sh) {
-    sh = ss.insertSheet('Notifications');
-    sh.appendRow(['ID','Type','Message','Details','Created At']);
-  }
-  var n = Math.max(sh.getLastRow(), 1);
-  var id = 'NOTIF-' + ('000' + n).slice(-4);
-  sh.appendRow([id, type, msg, JSON.stringify(details || {}), new Date().toISOString()]);
-  sendOneSignal_('Site Procurement', msg);
-}
-
-function handleNotify_(type, d) {
-  var icons = { sr_submitted:'&#x1F4CB;', sr_approved:'&#x2705;',
-                po_created:'&#x1F6D2;',  mre_submitted:'&#x1F4E6;' };
-  var icon = icons[type] || '&#x1F514;';
-  // Message is pre-built in the app; GAS just prepends the icon
-  var msg = d.message ? icon + ' ' + d.message : icon + ' ' + (d.id || type);
-  pushNotification_(type, msg, d);
-}
-
-// ── doPost ────────────────────────────────────────────────────
+          <pre style="margin:0;padding:14px;font-size:11px;font-family:'DM Mono',monospace;background:var(--surface);overflow-x:auto;color:var(--text);line-height:1.6;">// ── doPost ────────────────────────────────────────────────────
 function doPost(e) {
   var data = JSON.parse(e.postData.contents);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -2032,14 +1915,6 @@ function doPost(e) {
   // SYNC MASTER DATA — write each collection to its own sheet
   if (data.action === 'syncMasterData') {
     syncMasterData_(data.data || {});
-    return ContentService
-      .createTextOutput(JSON.stringify({success:true}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-
-  // NOTIFY action — write to Notifications sheet + send OneSignal push
-  if (data.action === 'notify') {
-    handleNotify_(data.type, data.data || {});
     return ContentService
       .createTextOutput(JSON.stringify({success:true}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -2128,7 +2003,6 @@ function doGet(e) {
   if (action === 'readAll') {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheets = ['Requisitions','PurchaseOrders','SiteReceipts','Works',
-                  'Notifications','MasterData',
                   'Categories','Materials','LaborTypes','TeamMembers','Sites','Vendors'];
     var result = {};
     sheets.forEach(function(name) {
@@ -2635,8 +2509,6 @@ async function submitRequisitionRecord({ date, requestedBy, items, laborItems, r
     const ok = await syncToSheets('Requisitions', rec);
     if (!ok) { APP.records.requisitions.pop(); setModalSaving(false); notify('Save failed — check connection.', true); return false; }
     notify(`Requisition ${rec.id} created`);
-    { const _d = { id: rec.id, site: rec.site, by: rec.requestedBy, items: rec.items, laborItems: rec.laborItems };
-      gasNotify('sr_submitted', { ..._d, message: _notifMsg('sr_submitted', _d) }); }
   }
   setModalSaving(false);
   render(redirectPage);
@@ -2878,9 +2750,7 @@ function wizardRender() {
           return `<div class="wizard-card-wrap">
             <div class="wizard-card ${sel ? 'selected' : ''}" onclick="wizardCardTap('${wizardEsc(i.name)}')">
               ${sel ? '<div class="wizard-card-check">✓</div>' : ''}
-              ${i.imageUrl
-                ? `<img src="${i.imageUrl}" alt="" class="wizard-card-img">`
-                : `<div class="wizard-card-icon">${WZ.type === 'material' ? '📦' : '👷'}</div>`}
+              <div class="wizard-card-icon">${WZ.type === 'material' ? '📦' : '👷'}</div>
               <div class="wizard-card-label">${i.name}</div>
               ${sel ? `<div class="wizard-card-qty-badge">${WZ.qty[i.name]}${i.unit ? ' ' + i.unit : ''}</div>` : ''}
             </div>
@@ -3314,8 +3184,6 @@ async function savePO(id) {
     const ok = await syncToSheets('PurchaseOrders', rec);
     if (!ok) { APP.records.pos.pop(); if (srRef) { const sr = APP.records.requisitions.find(r=>r.id===srRef); if (sr) delete sr.poRef; } setModalSaving(false); notify('Save failed — check connection.', true); return; }
     closeModal(); notify(`Purchase Order ${rec.id} saved`);
-    { const _d = { id: rec.id, vendor: rec.vendor, site: rec.site, by: rec.orderedBy, srRef: rec.srRef||null, delivery: rec.deliveryDate ? fmtDate(rec.deliveryDate) : null, items: rec.items, laborItems: rec.laborItems };
-      gasNotify('po_created', { ..._d, message: _notifMsg('po_created', _d) }); }
   }
   render('po');
 }
@@ -3569,8 +3437,6 @@ async function saveMRE(id) {
       if (po && !po.forceComplete && !_forceCompletedIds.has(po.id)) { po.status = computePOStatus(poRef); await syncToSheets('PurchaseOrders', po); }
     }
     closeModal(); notify(`MRE ${rec.id} saved`);
-    { const _d = { id: rec.id, vendor: rec.vendor, site: rec.site, by: rec.receivedBy, poRef: rec.poRef||null, items: rec.items, laborItems: rec.laborItems };
-      gasNotify('mre_submitted', { ..._d, message: _notifMsg('mre_submitted', _d) }); }
   }
   render('mre');
 }
@@ -4187,8 +4053,6 @@ async function approveReq(id) {
     notify('Approval failed — check connection.', true); return;
   }
   closeModal(); notify(`${id} approved by ${APP.currentUser}`);
-  { const _d = { id: r.id, site: r.site, by: APP.currentUser, createdBy: r.requestedBy, items: r.items, laborItems: r.laborItems };
-    gasNotify('sr_approved', { ..._d, message: _notifMsg('sr_approved', _d) }); }
   render('requisition');
 }
 
@@ -4532,13 +4396,6 @@ function editAdminItem(collection, id) {
             ${cats.map(c=>`<option value="${c}" ${item.category===c?'selected':''}>${c}</option>`).join('')}
           </select>
         </label>
-        <label style="font-size:13px;font-weight:600;">Thumbnail Image URL <span style="font-weight:400;color:var(--text-3);">(optional)</span>
-          <div style="display:flex;gap:6px;margin-top:4px;">
-            <input id="edit-f3" value="${item.imageUrl||''}" placeholder="https://… or use AI Generate →" style="flex:1;padding:10px 11px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:'DM Sans',sans-serif;background:var(--surface);color:var(--text);">
-            <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" onclick="aiGenerateSingle('materials','${item.id}','${item.name.replace(/'/g,"\\'")}')">🤖 AI</button>
-          </div>
-        </label>
-        <img id="edit-thumb-preview" src="${item.imageUrl||''}" alt="" style="width:64px;height:64px;border-radius:8px;object-fit:cover;display:${item.imageUrl?'block':'none'};">
       </div>`;
 
   } else if (collection === 'laborTypes') {
@@ -4558,13 +4415,6 @@ function editAdminItem(collection, id) {
             ${cats.map(c=>`<option value="${c}" ${item.category===c?'selected':''}>${c}</option>`).join('')}
           </select>
         </label>
-        <label style="font-size:13px;font-weight:600;">Thumbnail Image URL <span style="font-weight:400;color:var(--text-3);">(optional)</span>
-          <div style="display:flex;gap:6px;margin-top:4px;">
-            <input id="edit-f3" value="${item.imageUrl||''}" placeholder="https://… or use AI Generate →" style="flex:1;padding:10px 11px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-family:'DM Sans',sans-serif;background:var(--surface);color:var(--text);">
-            <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" onclick="aiGenerateSingle('laborTypes','${item.id}','${item.name.replace(/'/g,"\\'")}')">🤖 AI</button>
-          </div>
-        </label>
-        <img id="edit-thumb-preview" src="${item.imageUrl||''}" alt="" style="width:64px;height:64px;border-radius:8px;object-fit:cover;display:${item.imageUrl?'block':'none'};">
       </div>`;
 
   } else if (collection === 'sites') {
@@ -4591,8 +4441,6 @@ function saveAdminItemEdit(collection, id) {
   const f0 = document.getElementById('edit-f0')?.value.trim();
   const f1 = document.getElementById('edit-f1')?.value.trim();
   const f2 = document.getElementById('edit-f2')?.value;
-  const f3 = document.getElementById('edit-f3')?.value.trim();
-
   if (!f0) { notify('Name cannot be empty.', true); return; }
 
   if (collection === 'teamMembers') {
@@ -4624,7 +4472,6 @@ function saveAdminItemEdit(collection, id) {
       item.name = f0;
       item.unit = f1 || '';
       item.category = f2 || '';
-      if (f3) item.imageUrl = f3; else delete item.imageUrl;
     }
 
   } else if (collection === 'laborTypes') {
@@ -4633,7 +4480,6 @@ function saveAdminItemEdit(collection, id) {
       item.name = f0;
       item.unit = f1 || '';
       item.category = f2 || '';
-      if (f3) item.imageUrl = f3; else delete item.imageUrl;
     }
 
   } else if (collection === 'sites') {
@@ -4809,46 +4655,6 @@ function setSiteLocation(id) {
   );
 }
 
-// ── AI thumbnail generation via Pollinations.ai (free, no API key) ──
-// Builds a deterministic image URL from the item name. The seed is derived
-// from the name so the same item always gets the same image across devices.
-function pollinationsUrl(name, context) {
-  const prompt = encodeURIComponent(
-    `${name} ${context}, single object, flat lay, clean white background, product photo, high quality`
-  );
-  // Simple numeric seed from item name for consistency
-  const seed = [...name].reduce((s, c) => (s * 31 + c.charCodeAt(0)) & 0xfffff, 0);
-  return `https://image.pollinations.ai/prompt/${prompt}?width=200&height=200&seed=${seed}&nologo=true`;
-}
-
-function aiGenerateSingle(collectionKey, id, name) {
-  const context = collectionKey === 'laborTypes' ? 'construction labor trade worker' : 'construction building material';
-  const url = pollinationsUrl(name, context);
-  const input = document.getElementById('edit-f3');
-  const preview = document.getElementById('edit-thumb-preview');
-  if (input) input.value = url;
-  if (preview) { preview.src = url; preview.style.display = 'block'; }
-}
-
-async function aiGenerateImages(collectionKey) {
-  const items = (APP.masterData[collectionKey] || []).filter(i => !i.imageUrl);
-  const progressEl = document.getElementById('ai-img-progress-' + collectionKey);
-  if (!items.length) { notify('All items already have thumbnails.'); return; }
-  const context = collectionKey === 'laborTypes' ? 'construction labor trade worker' : 'construction building material';
-  let done = 0;
-  for (const item of items) {
-    if (progressEl) progressEl.textContent = `Generating ${done + 1}/${items.length}…`;
-    item.imageUrl = pollinationsUrl(item.name, context);
-    done++;
-    // Small pause so the browser doesn't fire 40 concurrent image loads
-    await new Promise(r => setTimeout(r, 60));
-  }
-  saveLocal();
-  syncMasterData();
-  if (progressEl) progressEl.textContent = '';
-  notify(`${done} thumbnail${done === 1 ? '' : 's'} generated`);
-  render('admin');
-}
 
 // ══════════════════════════════════════════
 //  GOOGLE SHEETS SYNC  (Apps Script Web App)
@@ -5110,19 +4916,6 @@ async function loadFromSheets(silent = false) {
       }
     });
 
-    // ── Load notifications ──
-    {
-      const rows = data['Notifications'] || [];
-      APP.notifications = rows.map(r => ({
-        id:        r['ID']         || '',
-        type:      r['Type']       || '',
-        message:   r['Message']    || '',
-        details:   (() => { try { return JSON.parse(r['Details']||'{}'); } catch(e) { return {}; } })(),
-        createdAt: r['Created At'] || ''
-      })).filter(n => n.id);
-      updateNotifBadge();
-    }
-
     saveLocal();
     updateGsStatus();
     if (!silent) notify(totalLoaded > 0 ? `Loaded ${totalLoaded} records from Sheets` : 'Connected — no records yet');
@@ -5134,209 +4927,6 @@ async function loadFromSheets(silent = false) {
   }
 }
 
-// ══════════════════════════════════════════
-//  NOTIFICATION BELL
-// ══════════════════════════════════════════
-
-// --- Badge ---
-function updateNotifBadge() {
-  const seenAt = localStorage.getItem('notifSeenAt') || '1970-01-01T00:00:00Z';
-  const unread = (APP.notifications || []).filter(n => n.createdAt > seenAt).length;
-  const badge = document.getElementById('notif-badge');
-  if (!badge) return;
-  if (unread > 0) {
-    badge.textContent = unread > 99 ? '99+' : String(unread);
-    badge.style.display = 'flex';
-  } else {
-    badge.style.display = 'none';
-  }
-}
-
-// --- Panel open / close ---
-function openNotifPanel() {
-  document.getElementById('notif-overlay').classList.add('open');
-  document.getElementById('notif-panel').classList.add('open');
-  renderNotifList();
-  refreshPushOptInBanner();
-  // Mark as read after 800ms so badge briefly shows before clearing
-  setTimeout(() => {
-    localStorage.setItem('notifSeenAt', new Date().toISOString());
-    updateNotifBadge();
-  }, 800);
-}
-
-// --- Push opt-in (OneSignal) ---
-function refreshPushOptInBanner() {
-  const banner = document.getElementById('push-optin-banner');
-  if (!banner || !window.OneSignalDeferred) return;
-  window.OneSignalDeferred.push(async (OneSignal) => {
-    const sub = OneSignal.User.PushSubscription;
-    // Require an actual subscription id, not just the optedIn flag — that
-    // flag can be true from an earlier attempt that never actually
-    // completed registration, which would otherwise hide the banner with
-    // no real subscription behind it.
-    const reallySubscribed = sub.optedIn && !!sub.id;
-    banner.style.display = reallySubscribed ? 'none' : 'block';
-  });
-}
-
-function enablePushNotifications() {
-  if (!window.OneSignalDeferred) return;
-  window.OneSignalDeferred.push(async (OneSignal) => {
-    // The whole body is wrapped — an uncaught throw inside this callback
-    // (e.g. from optIn() itself failing) was an unhandled promise
-    // rejection with no UI feedback at all, which is exactly the "clicking
-    // the button did nothing" symptom seen on retry.
-    try {
-      await OneSignal.Notifications.requestPermission();
-      const sub = OneSignal.User.PushSubscription;
-      // Always force a clean opt-out/opt-in cycle on manual trigger,
-      // rather than trusting optedIn (which can be a stale local flag from
-      // an earlier attempt that never actually completed registration).
-      if (Notification.permission === 'granted') {
-        if (sub.optedIn) await sub.optOut();
-        await sub.optIn();
-      }
-      refreshPushOptInBanner();
-      if (OneSignal.User.PushSubscription.optedIn && OneSignal.User.PushSubscription.id) {
-        notify('Push notifications enabled');
-      } else if (Notification.permission === 'denied') {
-        notify('Notifications blocked — enable them in your browser/site settings.', true);
-      } else {
-        notify('Subscribed locally, but no subscription id yet — see debug.', true);
-      }
-    } catch (err) {
-      notify('Push enable failed: ' + (err.message || err), true);
-    }
-  });
-}
-
-function closeNotifPanel() {
-  document.getElementById('notif-overlay').classList.remove('open');
-  document.getElementById('notif-panel').classList.remove('open');
-}
-function markAllNotifsRead() {
-  localStorage.setItem('notifSeenAt', new Date().toISOString());
-  updateNotifBadge();
-  renderNotifList();
-}
-
-// --- Render list ---
-function renderNotifList() {
-  const seenAt = localStorage.getItem('notifSeenAt') || '1970-01-01T00:00:00Z';
-  const el = document.getElementById('notif-list');
-  if (!el) return;
-  const notifs = [...(APP.notifications || [])].reverse(); // newest first
-  if (!notifs.length) {
-    el.innerHTML = '<div class="notif-empty">🔔<br>No notifications yet</div>';
-    return;
-  }
-  const ICONS = { sr_submitted:'📋', sr_approved:'✅', sr_rejected:'❌', po_created:'🛒', mre_submitted:'📦' };
-  el.innerHTML = notifs.map(n => {
-    const unread = n.createdAt > seenAt;
-    const icon = ICONS[n.type] || '🔔';
-    const lines = (n.message || '').split('\n').filter(Boolean);
-    // First line is the bold title, rest are detail lines
-    const title = _esc(lines[0] || '');
-    const details = lines.slice(1).map(_esc).join(' · ');
-    return `<div class="notif-item${unread ? ' unread' : ''}">
-      <div class="notif-item-icon">${icon}</div>
-      <div class="notif-item-body">
-        <div class="notif-item-msg"><strong>${title}</strong>${details ? '<br><span style="color:#555;">' + details + '</span>' : ''}</div>
-        <div class="notif-item-time">${_timeAgo(n.createdAt)}</div>
-      </div>
-      ${unread ? '<div class="notif-unread-dot"></div>' : ''}
-    </div>`;
-  }).join('');
-}
-
-function _esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-function _timeAgo(iso) {
-  if (!iso) return '';
-  const m = Math.floor((Date.now() - new Date(iso)) / 60000);
-  if (m < 1)  return 'Just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-// --- Notification message builders ---
-
-function _niList(arr, max) {
-  // arr of strings → "a, b, c (+2 more)"
-  if (!arr.length) return null;
-  const s = arr.slice(0, max).join(', ');
-  return arr.length > max ? s + ` (+${arr.length - max} more)` : s;
-}
-function _niClean(s) { return s.trim().replace(/\s{2,}/g, ' '); }
-
-// SR / PO: "Cement (50 bags), Steel rods (20 nos)"
-function _niSR(items, laborItems) {
-  const mat = (items||[]).map(i => _niClean(`${i.material} (${i.qty||''} ${i.unit||''})`));
-  const lab = (laborItems||[]).map(l => _niClean(`${l.trade} (${l.qty||''} ${l.unit||''})`));
-  return _niList([...mat, ...lab], 4);
-}
-// PO: "Cement 50 bags, Steel rods 20 nos" (no parens, matches user's requested format)
-function _niPO(items, laborItems) {
-  const mat = (items||[]).map(i => _niClean(`${i.material} ${i.qty||''} ${i.unit||''}`));
-  const lab = (laborItems||[]).map(l => _niClean(`${l.trade} ${l.qty||''} ${l.unit||''}`));
-  return _niList([...mat, ...lab], 4);
-}
-// MRE: "Cement: received 48 bags (ordered 50 bags)"
-function _niMRE(items, laborItems) {
-  const mat = (items||[]).map(i => {
-    let s = `${i.material}: received ${i.receivedQty||0} ${i.unit||''}`.trim();
-    if (i.orderedQty) s += ` (ordered ${i.orderedQty} ${i.unit||''})`.trim();
-    return _niClean(s);
-  });
-  const lab = (laborItems||[]).map(l => _niClean(`${l.trade}: ${l.qty||0} ${l.unit||''}`));
-  return _niList([...mat, ...lab], 4);
-}
-
-// Full message text per event type
-function _notifMsg(type, d) {
-  if (type === 'sr_submitted') {
-    const items = _niSR(d.items, d.laborItems);
-    let msg = `Site Requisition ${d.id} created by ${d.by}`;
-    if (items) msg += ` for ${items}`;
-    msg += `. Waiting for approval.`;
-    return msg;
-  }
-  if (type === 'sr_approved') {
-    const items = _niSR(d.items, d.laborItems);
-    let msg = `Site Requisition ${d.id} created by ${d.createdBy}`;
-    if (items) msg += ` for ${items}`;
-    msg += ` has been approved by ${d.by}.`;
-    return msg;
-  }
-  if (type === 'po_created') {
-    const items = _niPO(d.items, d.laborItems);
-    let msg = `Purchase order ${d.id}`;
-    if (items) msg += ` for ${items}`;
-    msg += ` has been made to ${d.vendor}.`;
-    if (d.delivery) msg += ` Expected delivery by ${d.delivery}.`;
-    return msg;
-  }
-  if (type === 'mre_submitted') {
-    const items = _niMRE(d.items, d.laborItems);
-    let msg = `${d.by} received`;
-    if (items) msg += ` ${items}`;
-    msg += ` from ${d.vendor}.`;
-    return msg;
-  }
-  return d.id || type;
-}
-
-// --- Fire-and-forget notify POST to GAS ---
-function gasNotify(type, data) {
-  if (!APP.gsConnected || !APP.gsScriptUrl) return;
-  const payload = { action: 'notify', type, data };
-  const blob = new Blob([JSON.stringify(payload)], { type: 'text/plain' });
-  fetch(APP.gsScriptUrl, { method: 'POST', mode: 'no-cors', body: blob }).catch(() => {});
-}
 
 // ══════════════════════════════════════════
 //  INIT
