@@ -5181,7 +5181,7 @@ async function loadFromSheets(silent = false) {
     const newCats  = (data.Categories  || []).map(r => ({ id: r['ID'], name: r['Name'] })).filter(r => r.id && r.name);
     const newMats  = (data.Materials   || []).map(r => { const o = { id: r['ID'], name: r['Name'] }; if (r['Unit']) o.unit = r['Unit']; if (r['Category']) o.category = r['Category']; if (r['ImageUrl']) o.imageUrl = r['ImageUrl']; return o; }).filter(r => r.id && r.name);
     const newLabor = (data.LaborTypes  || []).map(r => { const o = { id: r['ID'], name: r['Name'] }; if (r['Unit']) o.unit = r['Unit']; if (r['Category']) o.category = r['Category']; if (r['ImageUrl']) o.imageUrl = r['ImageUrl']; return o; }).filter(r => r.id && r.name);
-    const newTeam  = (data.TeamMembers || []).map(r => { const o = { id: r['ID'], name: r['Name'], role: r['Role']||'', approver: r['Approver']==='true', pinHash: r['PinHash']||'' }; return o; }).filter(r => r.id && r.name);
+    const newTeam  = (data.TeamMembers || []).map(r => { const o = { id: r['ID'], name: r['Name'], role: r['Role']||'', approver: r['Approver'] === true || r['Approver'] === 'true' || String(r['Approver']).toLowerCase() === 'true', pinHash: r['PinHash']||'' }; return o; }).filter(r => r.id && r.name);
     const newSites = (data.Sites       || []).map(r => { const o = { id: r['ID'], name: r['Name'] }; if (r['Lat']) o.lat = parseFloat(r['Lat']); if (r['Lng']) o.lng = parseFloat(r['Lng']); return o; }).filter(r => r.id && r.name);
     const newVendors = (data.Vendors   || []).map(r => { let cats = []; try { cats = JSON.parse(r['Categories']||'[]'); } catch(e){} return { id: r['ID'], name: r['Name'], categories: cats }; }).filter(r => r.id && r.name);
 
