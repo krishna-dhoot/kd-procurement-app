@@ -147,17 +147,20 @@ PENDING / KNOWN ISSUES (as of handover to Claude Code)
   .drawer-overlay.open { opacity: 1; pointer-events: all; }
   .drawer { position: fixed; top: 0; left: -280px; width: 280px; height: 100%; background: #0F6E56; z-index: 160; transition: left 0.24s cubic-bezier(.4,0,.2,1); overflow-y: auto; display: flex; flex-direction: column; }
   .drawer.open { left: 0; }
-  .drawer-header { padding: 52px 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.12); }
+  .drawer-header { padding: 44px 16px 12px; border-bottom: 1px solid rgba(255,255,255,0.12); }
   .drawer-logo { display: flex; align-items: center; gap: 10px; }
-  .drawer-logo-icon { width: 36px; height: 36px; background: rgba(255,255,255,0.18); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
-  .drawer-logo-text { font-size: 14px; font-weight: 600; color: #fff; line-height: 1.2; }
-  .drawer-logo-sub { font-size: 11px; color: rgba(255,255,255,0.6); }
-  .drawer-section { padding: 10px 10px 4px; }
-  .drawer-label { font-size: 10px; letter-spacing: 0.08em; opacity: 0.5; padding: 0 10px; margin-bottom: 4px; text-transform: uppercase; color: #fff; }
-  .drawer-item { display: flex; align-items: center; gap: 14px; padding: 15px 14px; border-radius: 9px; cursor: pointer; font-size: 17px; font-weight: 500; color: rgba(255,255,255,0.82); transition: background 0.12s; margin-bottom: 4px; border: none; background: none; width: 100%; text-align: left; min-height: 56px; }
+  .drawer-logo-icon { width: 32px; height: 32px; background: rgba(255,255,255,0.18); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .drawer-logo-text { font-size: 13px; font-weight: 600; color: #fff; line-height: 1.2; }
+  .drawer-logo-sub { font-size: 10px; color: rgba(255,255,255,0.6); }
+  .drawer-section { padding: 6px 0 0; flex: 1; display: flex; flex-direction: column; }
+  .drawer-section-bottom { padding: 0 0 16px; border-top: 1px solid rgba(255,255,255,0.12); }
+  .drawer-label { font-size: 10px; letter-spacing: 0.08em; opacity: 0.5; padding: 0 16px; margin-bottom: 2px; text-transform: uppercase; color: #fff; }
+  .drawer-item { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-radius: 0; cursor: pointer; font-size: 17px; font-weight: 500; color: rgba(255,255,255,0.85); transition: background 0.12s; margin-bottom: 0; border: none; background: none; width: 100%; text-align: left; flex: 1; min-height: 52px; }
   .drawer-item:active { background: rgba(255,255,255,0.12); }
   .drawer-item.active { background: rgba(255,255,255,0.18); color: #fff; }
-  .drawer-item-icon { font-size: 22px; width: 28px; text-align: center; flex-shrink: 0; }
+  .drawer-item-bottom { display: flex; align-items: center; gap: 14px; padding: 16px 16px; border-radius: 0; cursor: pointer; font-size: 17px; font-weight: 500; color: rgba(255,255,255,0.85); transition: background 0.12s; border: none; background: none; width: 100%; text-align: left; min-height: 56px; }
+  .drawer-item-bottom:active { background: rgba(255,255,255,0.12); }
+  .drawer-item-icon { font-size: 20px; width: 26px; text-align: center; flex-shrink: 0; }
   .drawer-badge { font-size: 10px; background: rgba(255,255,255,0.18); border-radius: 4px; padding: 2px 6px; margin-left: auto; font-family: 'DM Mono', monospace; color: rgba(255,255,255,0.7); }
   .drawer-lock-icon { margin-left: auto; opacity: 0.5; font-size: 12px; }
   /* Category chips in admin */
@@ -625,11 +628,14 @@ if ('serviceWorker' in navigator) {
   </div>
   <div class="drawer-section">
     <button class="drawer-item" onclick="navTo('dashboard')"><span class="drawer-item-icon">📊</span> Dashboard</button>
+    <button class="drawer-item" onclick="navTo('requisition')"><span class="drawer-item-icon">📋</span> Site Requests</button>
+    <button class="drawer-item" onclick="navTo('po')"><span class="drawer-item-icon">📄</span> Purchase Orders</button>
+    <button class="drawer-item" onclick="navTo('mre')"><span class="drawer-item-icon">🚛</span> Site Receipts</button>
     <button class="drawer-item" onclick="navTo('works')"><span class="drawer-item-icon">🏗️</span> Works</button>
     <button class="drawer-item" onclick="navTo('reports')"><span class="drawer-item-icon">📈</span> Reports</button>
   </div>
-  <div class="drawer-section" style="margin-top:auto;padding-bottom:20px;">
-    <button class="drawer-item" onclick="navTo('admin')"><span class="drawer-item-icon">⚙️</span> Admin Panel <span class="drawer-lock-icon">🔒</span></button>
+  <div class="drawer-section-bottom">
+    <button class="drawer-item-bottom" onclick="navTo('admin')"><span class="drawer-item-icon">⚙️</span> Admin Panel <span class="drawer-lock-icon">🔒</span></button>
   </div>
 </nav>
 
