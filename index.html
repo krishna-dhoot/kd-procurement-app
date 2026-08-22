@@ -5265,7 +5265,9 @@ async function loadFromSheets(silent = false) {
     saveLocal();
     updateGsStatus();
     if (!silent) notify(totalLoaded > 0 ? `Loaded ${totalLoaded} records from Sheets` : 'Connected — no records yet');
-    render(APP.currentPage);
+    // Skip re-render if user is actively typing — avoids wiping input fields mid-entry
+    const tag = document.activeElement?.tagName;
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') render(APP.currentPage);
 
   } catch(e) {
     console.warn('Load from Sheets failed:', e?.message || e);
